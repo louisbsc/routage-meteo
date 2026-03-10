@@ -24,13 +24,13 @@ exec_.ipynb : exection et affichage de l'ensemble
 
 ## Roadmap
 
-[x] Réduction temps de calcul par passage numpy, KDTree
-[x] Réduciotn temps de calcul par calcul partiel d'isochrones
-[x] Interface avec barre de temps
-[ ] Fonction rafineur de route
-[ ] Intégration courants
-[ ] Gestion de la côte / zones interdites
-[ ] Corriger conversion def <-> nm
-[ ] Intégration marrée, côté non fixe
+[x] Réduction temps de calcul par passage numpy, KDTree /n
+[x] Réduciotn temps de calcul par calcul partiel d'isochrones  /n
+[x] Interface avec barre de temps /n
+[ ] Fonction rafineur de route /n
+[ ] Intégration courants /n
+[ ] Gestion de la côte / zones interdites /n
+[ ] Corriger conversion def <-> nm /n
+[ ] Intégration marrée, côté non fixe /n
 
 
