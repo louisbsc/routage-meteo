@@ -4,8 +4,9 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 
+fichier = "grib_vent/20260327_143145_AROME_P025_06.grb2"
 # fichier = "grib_vent/gfs_0_25.2025-11-29T16-50-54Z.grb2"
-fichier = "grib_vent/20260304_105640_GFS_P25_06.grb2"
+# fichier = "grib_vent/20260304_105640_GFS_P25_06.grb2"
 # fichier = "grib_vent/gfs_025_20260306_093631.grb2"
 
 ds_u10 = xr.open_dataset(fichier, engine="cfgrib", backend_kwargs={"indexpath": "", "filter_by_keys": {"shortName": "10u"}})
@@ -73,12 +74,47 @@ interp_func_lat = NearestNDInterpolator(points_lat, values)
 #     x, y = p[0], p[1]
 #     return interp_func_lat(x, y, t)
 
+import numpy as np
+import cartopy.io.shapereader as shpreader
+from shapely.ops import unary_union
+from shapely import contains_xy, prepare
+
+# Charge les polygones de terre Natural Earth
+land_shp = shpreader.natural_earth(
+    resolution='10m',
+    category='physical',
+    name='land'
+)
+
+reader = shpreader.Reader(land_shp)
+land_geom = unary_union(list(reader.geometries()))
+prepare(land_geom)   # utile pour des tests répétés sur la même géométrie
+
+def valide_nm(x, y):
+    lat = y / 60.0
+    lon = x / (60.0 * 0.7) - 360.0
+    return not contains_xy(land_geom, lon, lat)
+
+def valide_deg(lon, lat):
+    return not contains_xy(land_geom, lon - 360.0, lat)
+
 def gfs(p, t, ref):
     x, y = p[0], p[1]
-    if ref == 'nm':
-        return interp_func(x, y, t)
-    if ref == 'deg':
-        return interp_func_lat(x, y, t)
+
+    if ref == "nm":
+        return interp_func(x, y, t) if valide_nm(x, y) else np.array([0.0, 0.0])
+
+    if ref == "deg":
+        return interp_func_lat(x, y, t) if valide_deg(x, y) else np.array([0.0, 0.0])
+
+    raise ValueError("ref doit être 'nm' ou 'deg'")
+
+# def gfs(p, t, ref):
+#     x, y = p[0], p[1]
+#     if ref == 'nm':
+#         return interp_func(x, y, t)
+#     if ref == 'deg':
+#         return interp_func_lat(x, y, t)
     
 
 # interp_func_1 = LinearNDInterpolator(points, values)

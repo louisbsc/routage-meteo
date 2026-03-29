@@ -42,21 +42,63 @@ import fonctions_utiles as f
 #     intersect |= colinear
 #     return intersect
 
+# def intersection(A, B, C, D):
+#     AB = B - A
+#     AC = C - A
+#     AD = D - A
+
+#     CA = A - C
+#     CB = B - C
+#     CD = D - C  # C et D sont constants
+
+#     o1 = AB[:,0]*AC[:,1] - AB[:,1]*AC[:,0]
+#     o2 = AB[:,0]*AD[:,1] - AB[:,1]*AD[:,0]
+#     o3 = CD[0]*CA[:,1] - CD[1]*CA[:,0]
+#     o4 = CD[0]*CB[:,1] - CD[1]*CB[:,0]
+
+#     return (o1*o2 < 0) & (o3*o4 < 0)
+
 def intersection(A, B, C, D):
-    AB = B - A
-    AC = C - A
-    AD = D - A
+    # préfiltre bbox
+    min_ax = np.minimum(A[:, 0], B[:, 0])
+    max_ax = np.maximum(A[:, 0], B[:, 0])
+    min_ay = np.minimum(A[:, 1], B[:, 1])
+    max_ay = np.maximum(A[:, 1], B[:, 1])
 
-    CA = A - C
-    CB = B - C
-    CD = D - C  # C et D sont constants
+    min_cx = min(C[0], D[0])
+    max_cx = max(C[0], D[0])
+    min_cy = min(C[1], D[1])
+    max_cy = max(C[1], D[1])
 
-    o1 = AB[:,0]*AC[:,1] - AB[:,1]*AC[:,0]
-    o2 = AB[:,0]*AD[:,1] - AB[:,1]*AD[:,0]
-    o3 = CD[0]*CA[:,1] - CD[1]*CA[:,0]
-    o4 = CD[0]*CB[:,1] - CD[1]*CB[:,0]
+    mask = (
+        (max_ax >= min_cx) & (min_ax <= max_cx) &
+        (max_ay >= min_cy) & (min_ay <= max_cy)
+    )
 
-    return (o1*o2 < 0) & (o3*o4 < 0)
+    if not np.any(mask):
+        return np.zeros(A.shape[0], dtype=bool)
+
+    A2 = A[mask]
+    B2 = B[mask]
+
+    AB = B2 - A2
+    AC = C - A2
+    AD = D - A2
+
+    CA = A2 - C
+    CB = B2 - C
+    CD = D - C
+
+    o1 = AB[:, 0] * AC[:, 1] - AB[:, 1] * AC[:, 0]
+    o2 = AB[:, 0] * AD[:, 1] - AB[:, 1] * AD[:, 0]
+    o3 = CD[0] * CA[:, 1] - CD[1] * CA[:, 0]
+    o4 = CD[0] * CB[:, 1] - CD[1] * CB[:, 0]
+
+    inter2 = (o1 * o2 < 0) & (o3 * o4 < 0)
+
+    out = np.zeros(A.shape[0], dtype=bool)
+    out[mask] = inter2
+    return out
 
 # def bouclage(l, p, atol=1e-8):
 #     if len(l) < 3:
@@ -126,6 +168,9 @@ def points_les_plus_a(N, ang, p_dep, delta):
     mask = dist <= delta
     N_select = N[mask]
 
+    if not np.any(mask):
+        raise ValueError(f"Aucun point trouvé dans la bande delta.")
+
     projections = N_select[:, 0] * np.cos(ang) + N_select[:, 1] * np.sin(ang)
     idx_max = np.argmax(projections)
     p = N_select[idx_max]
@@ -133,9 +178,12 @@ def points_les_plus_a(N, ang, p_dep, delta):
     p_ref = np.concatenate([p_ref, [0.0, 0.0]])
     return p, p_ref
 
-def enveloppe(N, r, p_dep, dir, ang, delta):
-    p_dep = np.array(p_dep, dtype=float)
 
+def enveloppe(N, r, p_dep, p_arr, ang, delta):
+
+    p_dep = np.array(p_dep, dtype=float)
+    p_arr = np.array(p_arr, dtype=float)
+    dir = f.angle_direction(p_dep, p_arr)
     p1, p = points_les_plus_a(N, dir + ang, p_dep, delta)
 
     #voisins1 = pointsautour_np(p1, P, r)
@@ -167,8 +215,9 @@ def enveloppe(N, r, p_dep, dir, ang, delta):
     #l = [p, p1, p2]
 
     #while not np.array_equal(p2, l[0]): 
-    angle_oriente = f.angle_oriente_positif(l[k-1], p_dep, l[1])
-    while angle_oriente < 2 * ang or angle_oriente > 6:
+    angle_g = f.angle_oriente_negatif(l[1], p_dep, p_arr)
+    angle_oriente = f.angle_oriente_negatif(l[1], p_dep, l[k-1])
+    while angle_oriente < angle_g + ang or angle_oriente > 6:
 
         #voisins = pointsautour_np(p2, P, r)
         voisins = N[tree.query_ball_point(p2[:2], r)]
@@ -186,32 +235,34 @@ def enveloppe(N, r, p_dep, dir, ang, delta):
 
         p3 = voisins[idx]
 
-        while bouclage(l[:k], p3):
-        # while bouclage(np.array(l), p3):
-            mask = np.ones(len(voisins), dtype=bool)
-            mask[idx] = False
-            voisins = voisins[mask]
-            angles = angles[mask]
-            #voisins = np.delete(voisins, idx, axis=0)
-            #angles = np.delete(angles, idx)
-            if voisins.size == 0:
-                print("voisins vide")
+        if max_angle > np.pi:
 
-            # gestion cas 2 angles égaux
-            max_angle = np.max(angles)
-            candidats = np.where(np.abs(angles - max_angle) < eps)[0]
-            if len(candidats) == 1:
-                idx = candidats[0]
-            else:
-                dists = np.linalg.norm(voisins[candidats, :2] - p2[:2], axis=1)
-                idx = candidats[np.argmin(dists)]
+            while bouclage(l[:k], p3):
+            # while bouclage(np.array(l), p3):
+                mask = np.ones(len(voisins), dtype=bool)
+                mask[idx] = False
+                voisins = voisins[mask]
+                angles = angles[mask]
+                #voisins = np.delete(voisins, idx, axis=0)
+                #angles = np.delete(angles, idx)
+                if voisins.size == 0:
+                    raise ValueError(f"Aucun voisin trouvé dans le cercle r.")
 
-            p3 = voisins[idx]
+                # gestion cas 2 angles égaux
+                max_angle = np.max(angles)
+                candidats = np.where(np.abs(angles - max_angle) < eps)[0]
+                if len(candidats) == 1:
+                    idx = candidats[0]
+                else:
+                    dists = np.linalg.norm(voisins[candidats, :2] - p2[:2], axis=1)
+                    idx = candidats[np.argmin(dists)]
+
+                p3 = voisins[idx]
 
         l[k] = p3
         k += 1
         p1, p2 = p2, p3
-        angle_oriente = f.angle_oriente_positif(l[k-1], p_dep, l[1])
+        angle_oriente = f.angle_oriente_negatif(l[1], p_dep, l[k-1])
 
     return l[1:k]
 

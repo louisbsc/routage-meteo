@@ -41,20 +41,22 @@ def nuage_iso(I, t, dt, n, V, P):
 		blocs.append(l)
 	return np.vstack(blocs)
 
-def iso_suivante(p_dep, I, t, dt, n, V, P, r, dir, ang, delta):
+def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta):
 	L = nuage_iso(I, t, dt, n, V, P)
-	return env.enveloppe(L, r, p_dep, dir, ang, delta)
+	return env.enveloppe(L, r, p_dep, p_arr, ang, delta)
 
-def n_iso(N, p_dep, t, dt, n, V, P, r, dir, ang, dang, delta):
+def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, delta):
 	I0 = np.array([p_dep], dtype=float)
+	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
 	I = iso_point(p_dep, t, dt, n, V, P)
 	L = [I0, I]
-	for _ in range(N - 2):
+	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
+	for _ in range(N - 1):
 		t += dt
 		ang -= dang
-		I = iso_suivante(p_dep, I, t, dt, n, V, P, r, dir, ang, delta)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta)
 		L.append(I)
-		print(f"nombre isochrones : {len(L)}, temps écoulé : {t:.2f} heures, nombre de points : {len(I)}")
+		print(f"nombre isochrones : {len(L) - 1}, temps écoulé : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	return np.vstack(L)
 
 def iso_est_arrive(I, p_arr, e_arr):
@@ -67,7 +69,6 @@ def point_qui_est_arrive(l, p_arr, e_arr):
 	return l[np.argmin(distances)]
 
 def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
-	dir = f.angle_direction(p_dep, p_arr)
 	time_list = np.array([t], dtype=int)
 	p_arr = np.array(p_arr, dtype=float)
 	I0 = np.array([p_dep], dtype=float)
@@ -79,7 +80,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 		t += dt
 		ang -= dang
 		time_list = np.append(time_list, t)
-		I = iso_suivante(p_dep, I, t, dt, n, V, P, r, dir, ang, delta)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta)
 		L.append(I)
 		print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	p_final = point_qui_est_arrive(I, p_arr, e_arr)
