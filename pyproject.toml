@@ -1,0 +1,16 @@
+[project]
+name = "routage-numpy"
+version = "0.1.0"
+requires-python = ">=3.9.13"
+dependencies = [
+    "cartopy>=0.23.0",
+    "cfgrib>=0.9.15.1",
+    "eccodes>=2.47.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.9.4",
+    "numpy>=2.0.2",
+    "pandas>=2.3.3",
+    "pyqt5>=5.15.11",
+    "scipy>=1.13.1",
+    "xarray>=2024.7.0",
+]

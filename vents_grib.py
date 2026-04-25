@@ -4,7 +4,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 
-fichier = "grib_vent/20260327_143145_AROME_P025_06.grb2"
+fichier = "grib_vent/20260422_070337_GFS_P25_00.grb2"
 # fichier = "grib_vent/gfs_0_25.2025-11-29T16-50-54Z.grb2"
 # fichier = "grib_vent/20260304_105640_GFS_P25_06.grb2"
 # fichier = "grib_vent/gfs_025_20260306_093631.grb2"
