@@ -28,6 +28,7 @@ exec_.ipynb : exection et affichage de l'ensemble
 [x] Réduciotn temps de calcul par calcul partiel d'isochrones  <br>
 [x] Interface avec barre de temps <br>
 [x] Gestion côte fixe <br>
+[ ] Interpolation grib
 [ ] Fonction rafineur de route <br>
 [ ] Intégration courants <br>
 [ ] Corriger conversion def <-> nm <br>
