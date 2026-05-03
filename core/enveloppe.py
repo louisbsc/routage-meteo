@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.spatial import cKDTree
 
-import fonctions_utiles as f
+import core.utils as f
 
 # def intersection(A, B, C, D):
 #     """

@@ -1,9 +1,9 @@
 import numpy as np
 
-import fonctions_utiles as f
-import env_concave_partielle_angle as env
+import core.utils as f
+import core.enveloppe as env
 
-import courants
+import inputs.courants
 
 # def iso_point(p, t, dt, n, V, P, C = courants.C0):
 # 	x, y, index_iso, index_origine = p
