@@ -28,14 +28,14 @@ exec_.ipynb : exection et affichage de l'ensemble
 [x] Réduciotn temps de calcul par calcul partiel d'isochrones  <br>
 [x] Interface avec barre de temps <br>
 [x] Gestion côte fixe <br>
-[ ] Passer les angles en rad <br>
-[ ] Revoir et unifier fichier "inputs/vents" et "inputs/gribs" <br>
-[ ] Revoir gestion des polaires avec dossier data <br>
-[ ] Essayer nouv methode enveloppe k-plus proches voisins
+[x] Revoir pipeline donnée grib <br>
+[x] Revoir pipeline donnée polaires <br>
+[ ] Essayer nouv methode enveloppe k-plus proches voisins <br>
 
+[ ] Passer les angles en rad <br>
+[ ] Intégration courants <br>
 [ ] Interpolation grib <br>
 [ ] Fonction rafineur de route <br>
-[ ] Intégration courants <br>
 [ ] Corriger conversion def <-> nm <br>
 [ ] Intégration marrée, côté non fixe <br>
 

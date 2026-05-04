@@ -104,11 +104,8 @@ def routage(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 	# p_dep = [R * p_dep[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_dep[0] * np.pi / 360)), 0, 0]
 	# p_arr = [R * p_arr[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_arr[0] * np.pi / 360))]
 
-
-	def VENT_NM(p, t):
-		return V(p, t, ref = 'nm')
 	
-	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, VENT_NM, P, e_arr, r, ang, dang, delta)
+	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta)
 	
 	latitude = route[:, 1] / 60
 	longitude = route[:, 0] / (60 * 0.7)
