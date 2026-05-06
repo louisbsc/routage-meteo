@@ -1,9 +1,11 @@
 import numpy as np
+from shapely import contains_xy
 
 import core.utils as f
 import core.enveloppe as env
 
 import inputs.courants
+from inputs.vents import land_geom
 
 # def iso_point(p, t, dt, n, V, P, C = courants.C0):
 # 	x, y, index_iso, index_origine = p
@@ -30,22 +32,30 @@ def iso_point(p, t, dt, n, V, P):
 	dy = vit_bateau * dt * np.sin(np.pi/2 - np.radians(cap))
 	liste_index_iso = np.full(n, index_iso + 1, dtype=float)
 	liste_index_origine = np.full(n, 0, dtype=float)
-	return np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
-	
+	points = np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
+	lons = points[:, 0] / (60.0 * 0.7) - 360.0
+	lats = points[:, 1] / 60.0
+	mask = ~contains_xy(land_geom, lons, lats)
+	points = points[mask]
+	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
+	return points[idx_unique]
+
 
 def nuage_iso(I, t, dt, n, V, P):
 	blocs = []
 	for i, p in enumerate(I):
 		l = iso_point(p, t, dt, n, V, P)
-		l[:, -1] = np.full(n, i, dtype=float)
+		if len(l) == 0:
+			continue
+		l[:, -1] = i
 		blocs.append(l)
 	return np.vstack(blocs)
 
-def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta):
+def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, k_voisins, ang, delta):
 	L = nuage_iso(I, t, dt, n, V, P)
-	return env.enveloppe(L, r, p_dep, p_arr, ang, delta)
+	return env.enveloppe(L, k_voisins, p_dep, p_arr, ang, delta)
 
-def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, delta):
+def n_iso(N, p_dep, p_arr, t, dt, n, V, P, k_voisins, ang, dang, delta):
 	I0 = np.array([p_dep], dtype=float)
 	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
 	I = iso_point(p_dep, t, dt, n, V, P)
@@ -54,7 +64,7 @@ def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, delta):
 	for _ in range(N - 1):
 		t += dt
 		ang -= dang
-		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, k_voisins, ang, delta)
 		L.append(I)
 		print(f"nombre isochrones : {len(L) - 1}, temps écoulé : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	return np.vstack(L)
@@ -68,7 +78,7 @@ def point_qui_est_arrive(l, p_arr, e_arr):
 	distances = f.distance_np(l, p_arr)
 	return l[np.argmin(distances)]
 
-def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
+def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, k_voisins, ang, dang, delta):
 	time_list = np.array([t], dtype=int)
 	p_arr = np.array(p_arr, dtype=float)
 	I0 = np.array([p_dep], dtype=float)
@@ -80,7 +90,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 		t += dt
 		ang -= dang
 		time_list = np.append(time_list, t)
-		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, k_voisins, ang, delta)
 		L.append(I)
 		print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	p_final = point_qui_est_arrive(I, p_arr, e_arr)
@@ -94,7 +104,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 		p_final = p
 	return L, np.array(route)[::-1], time_list
 
-def routage(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
+def routage(p_dep, p_arr, t, dt, n, V, P, e_arr, k_voisins, ang, dang, delta):
 	# p_dep[1] = 360 - p_dep[1]
 	# p_arr[1] = 360 - p_arr[1]
 	p_dep = [p_dep[1] * 60 * 0.7, p_dep[0] * 60, 0, 0]
@@ -105,7 +115,7 @@ def routage(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 	# p_arr = [R * p_arr[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_arr[0] * np.pi / 360))]
 
 	
-	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta)
+	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, k_voisins, ang, dang, delta)
 	
 	latitude = route[:, 1] / 60
 	longitude = route[:, 0] / (60 * 0.7)

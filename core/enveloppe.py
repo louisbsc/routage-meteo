@@ -179,20 +179,19 @@ def points_les_plus_a(N, ang, p_dep, delta):
     return p, p_ref
 
 
-def enveloppe(N, r, p_dep, p_arr, ang, delta):
+def enveloppe(N, k_voisins, p_dep, p_arr, ang, delta):
 
     p_dep = np.array(p_dep, dtype=float)
     p_arr = np.array(p_arr, dtype=float)
     dir = f.angle_direction(p_dep, p_arr)
     p1, p = points_les_plus_a(N, dir + ang, p_dep, delta)
 
-    #voisins1 = pointsautour_np(p1, P, r)
     tree = cKDTree(N[:, :2])
-    voisins1 = N[tree.query_ball_point(p1[:2], r)]
+    kv = min(k_voisins, len(N))
+    voisins1 = N[np.atleast_1d(tree.query(p1[:2], k=kv)[1])]
 
-    #angles1 = np.abs(np.array([f.angleoriente3_np(p, p1, x) for x in voisins1]))
     angles1 = f.angle_oriente_positif(p, p1, voisins1)
-    
+
     # gestion cas 2 angles égaux
     max_angle = np.max(angles1)
     eps = 1e-12
@@ -211,17 +210,12 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta):
     l[1] = p1
     l[2] = p2
     k = 3
-    
-    #l = [p, p1, p2]
 
-    #while not np.array_equal(p2, l[0]): 
     angle_g = f.angle_oriente_negatif(l[1], p_dep, p_arr)
     angle_oriente = f.angle_oriente_negatif(l[1], p_dep, l[k-1])
     while angle_oriente < angle_g + ang or angle_oriente > 6:
 
-        #voisins = pointsautour_np(p2, P, r)
-        voisins = N[tree.query_ball_point(p2[:2], r)]
-        #angles = np.abs(np.array([f.angleoriente3_np(p1, p2, x) for x in voisins]))
+        voisins = N[np.atleast_1d(tree.query(p2[:2], k=kv)[1])]
         angles = f.angle_oriente_positif(p1, p2, voisins)
 
         # gestion cas 2 angles égaux
@@ -238,15 +232,12 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta):
         if max_angle > np.pi:
 
             while bouclage(l[:k], p3):
-            # while bouclage(np.array(l), p3):
                 mask = np.ones(len(voisins), dtype=bool)
                 mask[idx] = False
                 voisins = voisins[mask]
                 angles = angles[mask]
-                #voisins = np.delete(voisins, idx, axis=0)
-                #angles = np.delete(angles, idx)
                 if voisins.size == 0:
-                    raise ValueError(f"Aucun voisin trouvé dans le cercle r.")
+                    raise ValueError(f"Aucun voisin trouvé parmi les {k_voisins} plus proches voisins.")
 
                 # gestion cas 2 angles égaux
                 max_angle = np.max(angles)
