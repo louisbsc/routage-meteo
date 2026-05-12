@@ -30,14 +30,18 @@ def iso_point(p, t, dt, n, V, P):
 	dy = vit_bateau * dt * np.sin(np.pi/2 - np.radians(cap))
 	liste_index_iso = np.full(n, index_iso + 1, dtype=float)
 	liste_index_origine = np.full(n, 0, dtype=float)
-	return np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
+	points = np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
+	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
+	return points[idx_unique]
 	
 
 def nuage_iso(I, t, dt, n, V, P):
 	blocs = []
 	for i, p in enumerate(I):
 		l = iso_point(p, t, dt, n, V, P)
-		l[:, -1] = np.full(n, i, dtype=float)
+		if len(l) == 0:
+			continue
+		l[:, -1] = i
 		blocs.append(l)
 	return np.vstack(blocs)
 

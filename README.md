@@ -11,8 +11,6 @@ Ce projet consiste en la création d'un algorithme de routage météorologique p
 
 vents.py : modèles de champs de vent V : x, y, t -> wind_dir, wind_speed
 
-vents_grib.py : interpolations de prévisions de vent V : x, y, t -> wind_dir, wind_speed
-
 polaires.py : polaires de vitesse de bateaux P : ang, wind_speed -> boat_speed
 
 enveloppe.py : calcul de l'enveloppe d'un nuage de points
@@ -31,6 +29,7 @@ exec_.ipynb : exection et affichage de l'ensemble
 [x] Revoir pipeline donnée grib <br>
 [x] Revoir pipeline donnée polaires <br>
 [ ] Essayer nouv methode enveloppe k-plus proches voisins <br>
+[ ] Reduire la supperposition des points par vent nul dans iso_point
 
 [ ] Passer les angles en rad <br>
 [ ] Intégration courants <br>
