@@ -36,14 +36,37 @@ def iso_point(p, t, dt, n, V, P):
 	
 
 def nuage_iso(I, t, dt, n, V, P):
-	blocs = []
-	for i, p in enumerate(I):
-		l = iso_point(p, t, dt, n, V, P)
-		if len(l) == 0:
-			continue
-		l[:, -1] = i
-		blocs.append(l)
-	return np.vstack(blocs)
+	M = len(I)
+
+	# Vent pour tous les M points sources en une seule requête → (M, 2)
+	wind = V(I, t)
+	dir_vent = wind[:, 0]  # (M,)
+	vit_vent = wind[:, 1]  # (M,)
+
+	# Caps (calculés une seule fois, identiques pour tous les points)
+	cap = np.linspace(0, 360, n, endpoint=False)    # (n,)
+	cos_cap = np.cos(np.pi / 2 - np.radians(cap))  # (n,)
+	sin_cap = np.sin(np.pi / 2 - np.radians(cap))  # (n,)
+
+	# Angles au vent : (M, n)
+	ang_au_vent = (cap[None, :] - dir_vent[:, None]) % 360 - 180
+
+	# Vitesses bateau : une seule requête polaire sur M*n paires → (M, n)
+	vit_bateau = P(ang_au_vent.ravel(), np.repeat(vit_vent, n)).reshape(M, n)
+
+	# Positions candidates : (M, n)
+	x = I[:, 0:1] + vit_bateau * dt * cos_cap[None, :]
+	y = I[:, 1:2] + vit_bateau * dt * sin_cap[None, :]
+
+	# Métadonnées
+	index_iso     = np.repeat(I[:, 2] + 1, n)               # (M*n,)
+	index_origine = np.repeat(np.arange(M, dtype=float), n)  # (M*n,)
+
+	points = np.column_stack([x.ravel(), y.ravel(), index_iso, index_origine])  # (M*n, 4)
+
+	# Dédoublonnage global sur position arrondie
+	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
+	return points[idx_unique]
 
 def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta):
 	L = nuage_iso(I, t, dt, n, V, P)

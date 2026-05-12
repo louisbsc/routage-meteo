@@ -62,9 +62,10 @@ def polaire(path):
 	interpolate = RegularGridInterpolator((wind_angles, wind_speeds), boat_speeds, bounds_error=False, fill_value=0)
 
 	def polaire_func(ang, f):
-		ang = np.asarray(ang)                  # transforme en tableau si nécessaire
-		a = np.abs(ang % 360 - 180)            # transformation des angles
-		pts = np.column_stack((a, np.full_like(a, f)))  # on garde f constant
+		ang = np.asarray(ang)
+		a = np.abs(ang % 360 - 180)
+		f_col = np.full(len(a), f) if np.ndim(f) == 0 else np.asarray(f)
+		pts = np.column_stack((a, f_col))
 		return interpolate(pts)
 
 	return polaire_func

@@ -103,15 +103,22 @@ def vent_grib_nm(path):
     interp_u, interp_v = _build_uv_interpolators(df, 'x_data', 'y_data')
 
     def vent(p, t):
-        x, y = p[0], p[1]
-        if contains_xy(land_geom, x / (60.0 * 0.7) - 360.0, y / 60.0):
-            return np.array([0.0, 0.0])
-        pt = [[x, y, t]]
-        u = float(interp_u(pt))
-        v = float(interp_v(pt))
+        p = np.asarray(p)
+        batch = p.ndim == 2
+        xs = p[:, 0] if batch else p[0:1]
+        ys = p[:, 1] if batch else p[1:2]
+
+        pts = np.column_stack([xs, ys, np.full(len(xs), t)])
+        u = interp_u(pts)
+        v = interp_v(pts)
+        land = contains_xy(land_geom, xs / (60.0 * 0.7) - 360.0, ys / 60.0)
+        u[land] = 0.0
+        v[land] = 0.0
+
         force = np.sqrt(u**2 + v**2) * 1.94384
         direction = (np.degrees(np.arctan2(u, v)) + 180) % 360
-        return np.array([direction, force])
+        result = np.column_stack([direction, force])
+        return result if batch else result[0]
 
     return vent
 
@@ -120,15 +127,22 @@ def vent_grib_deg(path):
     interp_u, interp_v = _build_uv_interpolators(df, 'longitude', 'latitude')
 
     def vent(p, t):
-        x, y = p[0], p[1]
-        if contains_xy(land_geom, x - 360.0, y):
-            return np.array([0.0, 0.0])
-        pt = [[x, y, t]]
-        u = float(interp_u(pt))
-        v = float(interp_v(pt))
+        p = np.asarray(p)
+        batch = p.ndim == 2
+        xs = p[:, 0] if batch else p[0:1]
+        ys = p[:, 1] if batch else p[1:2]
+
+        pts = np.column_stack([xs, ys, np.full(len(xs), t)])
+        u = interp_u(pts)
+        v = interp_v(pts)
+        land = contains_xy(land_geom, xs - 360.0, ys)
+        u[land] = 0.0
+        v[land] = 0.0
+
         force = np.sqrt(u**2 + v**2) * 1.94384
         direction = (np.degrees(np.arctan2(u, v)) + 180) % 360
-        return np.array([direction, force])
+        result = np.column_stack([direction, force])
+        return result if batch else result[0]
 
     return vent
 
