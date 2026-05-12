@@ -34,7 +34,7 @@ def vent_circulaire(p, t):
 import xarray as xr
 import pandas as pd
 import numpy as np
-from scipy.interpolate import NearestNDInterpolator
+from scipy.interpolate import RegularGridInterpolator
 
 # transforme un fichier grib en table pandas propre
 def table(path):
@@ -51,9 +51,6 @@ def table(path):
     df['force'] = np.sqrt(df['u10']**2 + df['v10']**2) * 1.94384
     df['direction'] = np.degrees(np.arctan2(df['u10'], df['v10'])) + 180
     df['direction'] = df['direction'] % 360
-
-    columns_to_drop = ['u10', 'v10']
-    df = df.drop(columns=columns_to_drop, errors='ignore')
 
     df['temps'] = (df['valid_time'].apply(lambda x: x.timestamp()) - df['valid_time'][0].timestamp()) / 3600.0
     
@@ -81,29 +78,57 @@ prepare(land_geom)   # utile pour des tests répétés sur la même géométrie
 
 
 # renvoie la fonction vent correspondant à un grib dont le chemin est path
+def _build_uv_interpolators(df, x_col, y_col):
+    xs = np.sort(df[x_col].unique())
+    ys = np.sort(df[y_col].unique())
+    ts = np.sort(df['temps'].unique())
+
+    xi = np.searchsorted(xs, df[x_col].values)
+    yi = np.searchsorted(ys, df[y_col].values)
+    ti = np.searchsorted(ts, df['temps'].values)
+
+    u_grid = np.zeros((len(xs), len(ys), len(ts)))
+    v_grid = np.zeros((len(xs), len(ys), len(ts)))
+    u_grid[xi, yi, ti] = df['u10'].values
+    v_grid[xi, yi, ti] = df['v10'].values
+
+    kw = dict(method='linear', bounds_error=False, fill_value=None)
+    return (
+        RegularGridInterpolator((xs, ys, ts), u_grid, **kw),
+        RegularGridInterpolator((xs, ys, ts), v_grid, **kw),
+    )
+
 def vent_grib_nm(path):
     df = table(path)
-    points = np.array(df[['x_data', 'y_data', 'temps']])
-    values = np.array(df[['direction', 'force']])
-
-    interp_func = NearestNDInterpolator(points, values)
+    interp_u, interp_v = _build_uv_interpolators(df, 'x_data', 'y_data')
 
     def vent(p, t):
         x, y = p[0], p[1]
-        return interp_func(x, y, t) if (not contains_xy(land_geom, x / (60.0 * 0.7) - 360.0, y / 60.0)) else np.array([0.0, 0.0])
+        if contains_xy(land_geom, x / (60.0 * 0.7) - 360.0, y / 60.0):
+            return np.array([0.0, 0.0])
+        pt = [[x, y, t]]
+        u = float(interp_u(pt))
+        v = float(interp_v(pt))
+        force = np.sqrt(u**2 + v**2) * 1.94384
+        direction = (np.degrees(np.arctan2(u, v)) + 180) % 360
+        return np.array([direction, force])
 
     return vent
 
 def vent_grib_deg(path):
     df = table(path)
-    points = np.array(df[['longitude', 'latitude', 'temps']])
-    values = np.array(df[['direction', 'force']])
-
-    interp_func = NearestNDInterpolator(points, values)
+    interp_u, interp_v = _build_uv_interpolators(df, 'longitude', 'latitude')
 
     def vent(p, t):
         x, y = p[0], p[1]
-        return interp_func(x, y, t) if (not contains_xy(land_geom, x - 360.0, y)) else np.array([0.0, 0.0])
+        if contains_xy(land_geom, x - 360.0, y):
+            return np.array([0.0, 0.0])
+        pt = [[x, y, t]]
+        u = float(interp_u(pt))
+        v = float(interp_v(pt))
+        force = np.sqrt(u**2 + v**2) * 1.94384
+        direction = (np.degrees(np.arctan2(u, v)) + 180) % 360
+        return np.array([direction, force])
 
     return vent
 
