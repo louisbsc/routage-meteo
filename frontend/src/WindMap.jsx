@@ -59,7 +59,7 @@ export default function WindMap({
     // ── Vent ──────────────────────────────────────────────────────────────
     if (showGrib) result.push(new IconLayer({
       id: 'wind-arrows',
-      data,
+      data: data.filter(d => d.speed > 0),
       iconAtlas, iconMapping,
       getIcon: () => 'arrow',
       getPosition: d => [d.lon, d.lat, 0],

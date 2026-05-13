@@ -281,6 +281,17 @@ export default function App() {
           {windLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
         </div>
 
+        {/* ── Carte polaire ─────────────────────────────────────────── */}
+        <div style={card}>
+          <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase', marginBottom: 12 }}>
+            Polaire
+          </div>
+          <label style={labelStyle}>Fichier polaire</label>
+          <select value={polaire} onChange={e => setPolaire(e.target.value)} style={inputStyle}>
+            {polaires.map(p => <option key={p} value={p}>{p.replace('.csv', '')}</option>)}
+          </select>
+        </div>
+
         {/* ── Carte routage ────────────────────────────────────────── */}
         <div style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -304,13 +315,6 @@ export default function App() {
             point={arrPoint} accentColor="#ff6b6b"
             onToggle={() => toggleClick('arr')}
           />
-
-          {/* Polaire */}
-          <label style={{ ...labelStyle, marginTop: 4 }}>Polaire</label>
-          <select value={polaire} onChange={e => setPolaire(e.target.value)}
-            style={{ ...inputStyle, marginBottom: 10 }}>
-            {polaires.map(p => <option key={p} value={p}>{p.replace('.csv', '')}</option>)}
-          </select>
 
           {/* Date de départ */}
           <label style={labelStyle}>Date de départ</label>

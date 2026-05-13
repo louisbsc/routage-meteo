@@ -24,7 +24,7 @@ def iso_point(p, t, dt, n, V, P):
 	x, y, index_iso, index_origine = p
 	dir_vent, vit_vent = V(p, t)
 	cap = np.linspace(0, 360, n, endpoint=False)
-	ang_au_vent = (cap - dir_vent) % 360 - 180
+	ang_au_vent = ((dir_vent - cap + 180) % 360) - 180
 	vit_bateau = P(ang_au_vent, vit_vent)
 	dx = vit_bateau * dt * np.cos(np.pi/2 - np.radians(cap))
 	dy = vit_bateau * dt * np.sin(np.pi/2 - np.radians(cap))
@@ -101,6 +101,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 	I0 = np.array([p_dep], dtype=float)
 	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
 	I = iso_point(p_dep, t, dt, n, V, P)
+	I = env.enveloppe(I, r, p_dep, p_arr, ang, delta)
 	L = [I0, I]
 	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	while not iso_est_arrive(I, p_arr, e_arr):

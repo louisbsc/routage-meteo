@@ -56,14 +56,14 @@ from scipy.interpolate import RegularGridInterpolator
 
 def polaire(path):
 	df = pd.read_csv(path)
-	wind_angles = df.iloc[1:, 0].astype(float).values
+	wind_angles = df.iloc[:, 0].astype(float).values
 	wind_speeds = df.columns[1:].astype(float)
-	boat_speeds = df.iloc[1:, 1:].astype(float).values
+	boat_speeds = df.iloc[:, 1:].astype(float).values
 	interpolate = RegularGridInterpolator((wind_angles, wind_speeds), boat_speeds, bounds_error=False, fill_value=0)
 
 	def polaire_func(ang, f):
 		ang = np.asarray(ang)
-		a = np.abs(ang % 360 - 180)
+		a = np.abs(ang)
 		f_col = np.full(len(a), f) if np.ndim(f) == 0 else np.asarray(f)
 		pts = np.column_stack((a, f_col))
 		return interpolate(pts)
@@ -92,11 +92,12 @@ def aff_polaire(P, l, n):
 		X = []
 		Y = []
 		for k in range(n + 1):
-			ang = k * 360 / n
-			v = P(ang,f)
-			X.append( v * sin(radians(ang)))
-			Y.append(- v * cos(radians(ang)))
+			ang = k * 180 / n          # 0° (face au vent) → 180° (vent arrière)
+			v = P([ang], [f])[0]
+			X.append(v * sin(radians(ang)))
+			Y.append(v * cos(radians(ang)))
 		plt.plot(X, Y)
+		plt.scatter(X, Y)  # symétrie tribord/bâbord
 	plt.axis('equal')
 	plt.show()
 
