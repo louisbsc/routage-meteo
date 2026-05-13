@@ -94,7 +94,7 @@ def _build_uv_interpolators(df, x_col, y_col):
     u_grid[xi, yi, ti] = df['u10'].values
     v_grid[xi, yi, ti] = df['v10'].values
 
-    kw = dict(method='linear', bounds_error=False, fill_value=None)
+    kw = dict(method='linear', bounds_error=False, fill_value=0.0)
     return (
         RegularGridInterpolator((xs, ys, ts), u_grid, **kw),
         RegularGridInterpolator((xs, ys, ts), v_grid, **kw),

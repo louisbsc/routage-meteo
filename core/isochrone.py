@@ -20,14 +20,27 @@ import inputs.courants
 # 	liste_index_origine = np.full(n, 0, dtype=float)
 # 	return np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
 	
-def iso_point(p, t, dt, n, V, P):
+def _arc_resample(dx_dense, dy_dense, n):
+	"""Re-échantillonne une courbe polaire fermée à n points équirépartis en longueur d'arc."""
+	dx_cl = np.append(dx_dense, dx_dense[0])
+	dy_cl = np.append(dy_dense, dy_dense[0])
+	seg_len = np.hypot(np.diff(dx_cl), np.diff(dy_cl))
+	arc = np.concatenate([[0], np.cumsum(seg_len)])
+	targets = np.linspace(0, arc[-1], n, endpoint=False)
+	return np.interp(targets, arc, dx_cl), np.interp(targets, arc, dy_cl)
+
+def iso_point(p, t, dt, n, V, P, n_dense=3600):
 	x, y, index_iso, index_origine = p
 	dir_vent, vit_vent = V(p, t)
-	cap = np.linspace(0, 360, n, endpoint=False)
-	ang_au_vent = ((dir_vent - cap + 180) % 360) - 180
-	vit_bateau = P(ang_au_vent, vit_vent)
-	dx = vit_bateau * dt * np.cos(np.pi/2 - np.radians(cap))
-	dy = vit_bateau * dt * np.sin(np.pi/2 - np.radians(cap))
+
+	cap_dense = np.linspace(0, 360, n_dense, endpoint=False)
+	ang_dense = ((dir_vent - cap_dense + 180) % 360) - 180
+	vit_dense = P(ang_dense, vit_vent)
+	dx_dense = vit_dense * dt * np.cos(np.pi/2 - np.radians(cap_dense))
+	dy_dense = vit_dense * dt * np.sin(np.pi/2 - np.radians(cap_dense))
+
+	dx, dy = _arc_resample(dx_dense, dy_dense, n)
+
 	liste_index_iso = np.full(n, index_iso + 1, dtype=float)
 	liste_index_origine = np.full(n, 0, dtype=float)
 	points = np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
@@ -35,36 +48,43 @@ def iso_point(p, t, dt, n, V, P):
 	return points[idx_unique]
 	
 
-def nuage_iso(I, t, dt, n, V, P):
+def nuage_iso(I, t, dt, n, V, P, n_dense=3600):
 	M = len(I)
 
-	# Vent pour tous les M points sources en une seule requête → (M, 2)
 	wind = V(I, t)
 	dir_vent = wind[:, 0]  # (M,)
 	vit_vent = wind[:, 1]  # (M,)
 
-	# Caps (calculés une seule fois, identiques pour tous les points)
-	cap = np.linspace(0, 360, n, endpoint=False)    # (n,)
-	cos_cap = np.cos(np.pi / 2 - np.radians(cap))  # (n,)
-	sin_cap = np.sin(np.pi / 2 - np.radians(cap))  # (n,)
+	# Échantillonnage dense vectorisé sur M × n_dense
+	cap_dense = np.linspace(0, 360, n_dense, endpoint=False)          # (n_dense,)
+	cos_dense = np.cos(np.pi / 2 - np.radians(cap_dense))
+	sin_dense = np.sin(np.pi / 2 - np.radians(cap_dense))
 
-	# Angles au vent : (M, n)
-	ang_au_vent = (cap[None, :] - dir_vent[:, None]) % 360 - 180
+	ang_dense = (cap_dense[None, :] - dir_vent[:, None]) % 360 - 180  # (M, n_dense)
+	vit_dense = P(ang_dense.ravel(), np.repeat(vit_vent, n_dense)).reshape(M, n_dense)
 
-	# Vitesses bateau : une seule requête polaire sur M*n paires → (M, n)
-	vit_bateau = P(ang_au_vent.ravel(), np.repeat(vit_vent, n)).reshape(M, n)
+	dx_dense = vit_dense * dt * cos_dense[None, :]  # (M, n_dense)
+	dy_dense = vit_dense * dt * sin_dense[None, :]  # (M, n_dense)
 
-	# Positions candidates : (M, n)
-	x = I[:, 0:1] + vit_bateau * dt * cos_cap[None, :]
-	y = I[:, 1:2] + vit_bateau * dt * sin_cap[None, :]
+	# Longueurs d'arc cumulées vectorisées : (M, n_dense+1)
+	dx_cl = np.hstack([dx_dense, dx_dense[:, :1]])
+	dy_cl = np.hstack([dy_dense, dy_dense[:, :1]])
+	seg_len = np.hypot(np.diff(dx_cl, axis=1), np.diff(dy_cl, axis=1))
+	arc = np.hstack([np.zeros((M, 1)), np.cumsum(seg_len, axis=1)])
 
-	# Métadonnées
-	index_iso     = np.repeat(I[:, 2] + 1, n)               # (M*n,)
-	index_origine = np.repeat(np.arange(M, dtype=float), n)  # (M*n,)
+	# Re-échantillonnage à n points par courbe (boucle légère sur M)
+	all_x = np.empty((M, n))
+	all_y = np.empty((M, n))
+	for i in range(M):
+		targets = np.linspace(0, arc[i, -1], n, endpoint=False)
+		all_x[i] = np.interp(targets, arc[i], dx_cl[i]) + I[i, 0]
+		all_y[i] = np.interp(targets, arc[i], dy_cl[i]) + I[i, 1]
 
-	points = np.column_stack([x.ravel(), y.ravel(), index_iso, index_origine])  # (M*n, 4)
+	index_iso     = np.repeat(I[:, 2] + 1, n)
+	index_origine = np.repeat(np.arange(M, dtype=float), n)
 
-	# Dédoublonnage global sur position arrondie
+	points = np.column_stack([all_x.ravel(), all_y.ravel(), index_iso, index_origine])
+
 	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
 	return points[idx_unique]
 
