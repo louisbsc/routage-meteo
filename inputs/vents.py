@@ -53,7 +53,9 @@ def table(path):
     df['direction'] = df['direction'] % 360
 
     df['temps'] = (df['valid_time'].apply(lambda x: x.timestamp()) - df['valid_time'][0].timestamp()) / 3600.0
-    
+
+    df['longitude'] = df['longitude'].apply(lambda x: x - 360 if x > 180 else x)
+
     # transformation plane avec latitude moyenne
     df['x_data'] = df['longitude'] * 60 * 0.7
     df['y_data'] = df['latitude'] * 60
@@ -111,7 +113,7 @@ def vent_grib_nm(path):
         pts = np.column_stack([xs, ys, np.full(len(xs), t)])
         u = interp_u(pts)
         v = interp_v(pts)
-        land = contains_xy(land_geom, xs / (60.0 * 0.7) - 360.0, ys / 60.0)
+        land = contains_xy(land_geom, xs / (60.0 * 0.7), ys / 60.0)
         u[land] = 0.0
         v[land] = 0.0
 
@@ -135,7 +137,7 @@ def vent_grib_deg(path):
         pts = np.column_stack([xs, ys, np.full(len(xs), t)])
         u = interp_u(pts)
         v = interp_v(pts)
-        land = contains_xy(land_geom, xs - 360.0, ys)
+        land = contains_xy(land_geom, xs, ys)
         u[land] = 0.0
         v[land] = 0.0
 
