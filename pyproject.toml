@@ -10,7 +10,11 @@ dependencies = [
     "matplotlib>=3.9.4",
     "numpy>=2.0.2",
     "pandas>=2.3.3",
+    "plotly>=6.7.0",
     "pyqt5>=5.15.11",
+    "pyqtwebengine>=5.15.7",
     "scipy>=1.13.1",
     "xarray>=2024.7.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
 ]
