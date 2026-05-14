@@ -20,62 +20,28 @@ import inputs.courants
 # 	liste_index_origine = np.full(n, 0, dtype=float)
 # 	return np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
 	
-def _arc_resample(dx_dense, dy_dense, n):
-	"""Re-échantillonne une courbe polaire fermée à n points équirépartis en longueur d'arc."""
-	dx_cl = np.append(dx_dense, dx_dense[0])
-	dy_cl = np.append(dy_dense, dy_dense[0])
-	seg_len = np.hypot(np.diff(dx_cl), np.diff(dy_cl))
-	arc = np.concatenate([[0], np.cumsum(seg_len)])
-	targets = np.linspace(0, arc[-1], n, endpoint=False)
-	return np.interp(targets, arc, dx_cl), np.interp(targets, arc, dy_cl)
-
-def iso_point(p, t, dt, n, V, P, n_dense=180):
-	x, y, index_iso, index_origine = p
-	dir_vent, vit_vent = V(p, t)
-
+def _polar_offsets_batch(dir_vents, vit_vents, dt, P, n_dense=180):
+	"""Déplacements (dx, dy) pour M points × n_dense caps. Retourne (M, n_dense), (M, n_dense)."""
 	cap_dense = np.linspace(0, 360, n_dense, endpoint=False)
-	ang_dense = ((dir_vent - cap_dense + 180) % 360) - 180
-	vit_dense = P(ang_dense, vit_vent)
-	dx_dense = vit_dense * dt * np.cos(np.pi/2 - np.radians(cap_dense))
-	dy_dense = vit_dense * dt * np.sin(np.pi/2 - np.radians(cap_dense))
+	cos_cap   = np.cos(np.pi / 2 - np.radians(cap_dense))
+	sin_cap   = np.sin(np.pi / 2 - np.radians(cap_dense))
+	ang = (cap_dense[None, :] - dir_vents[:, None] + 180) % 360 - 180  # (M, n_dense)
+	vit = P(ang.ravel(), np.repeat(vit_vents, n_dense)).reshape(len(dir_vents), n_dense)
+	return vit * dt * cos_cap[None, :], vit * dt * sin_cap[None, :]
 
-	dx, dy = _arc_resample(dx_dense, dy_dense, n)
 
-	liste_index_iso = np.full(n, index_iso + 1, dtype=float)
-	liste_index_origine = np.full(n, 0, dtype=float)
-	points = np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
-	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
-	return points[idx_unique]
-	
-
-def nuage_iso(I, t, dt, n, V, P, n_dense=180):
-	M = len(I)
-
-	wind = V(I, t)
-	dir_vent = wind[:, 0]  # (M,)
-	vit_vent = wind[:, 1]  # (M,)
-
-	# Échantillonnage dense vectorisé sur M × n_dense
-	cap_dense = np.linspace(0, 360, n_dense, endpoint=False)          # (n_dense,)
-	cos_dense = np.cos(np.pi / 2 - np.radians(cap_dense))
-	sin_dense = np.sin(np.pi / 2 - np.radians(cap_dense))
-
-	ang_dense = (cap_dense[None, :] - dir_vent[:, None] + 180) % 360 - 180  # (M, n_dense)
-	vit_dense = P(ang_dense.ravel(), np.repeat(vit_vent, n_dense)).reshape(M, n_dense)
-
-	dx_dense = vit_dense * dt * cos_dense[None, :]  # (M, n_dense)
-	dy_dense = vit_dense * dt * sin_dense[None, :]  # (M, n_dense)
-
-	# Longueurs d'arc cumulées vectorisées : (M, n_dense+1)
+def _arc_resample_batch(dx_dense, dy_dense, n):
+	"""Ré-échantillonne M courbes polaires fermées à n points équirépartis en arc.
+	Entrée : (M, n_dense). Retourne all_x, all_y : (M, n)."""
+	M     = dx_dense.shape[0]
 	dx_cl = np.hstack([dx_dense, dx_dense[:, :1]])
 	dy_cl = np.hstack([dy_dense, dy_dense[:, :1]])
-	seg_len = np.hypot(np.diff(dx_cl, axis=1), np.diff(dy_cl, axis=1))
-	arc = np.hstack([np.zeros((M, 1)), np.cumsum(seg_len, axis=1)])
-
-	# Re-échantillonnage à n points par courbe — vectorisé (searchsorted row-offset)
-	n_arc     = arc.shape[1]                                                         # n_dense + 1
-	arc_total = arc[:, -1]                                                           # (M,)
-	t_tgt     = arc_total[:, None] * np.linspace(0, 1, n, endpoint=False)[None, :]  # (M, n)
+	arc   = np.hstack([np.zeros((M, 1)),
+	                   np.cumsum(np.hypot(np.diff(dx_cl, axis=1),
+	                                      np.diff(dy_cl, axis=1)), axis=1)])
+	n_arc     = arc.shape[1]
+	arc_total = arc[:, -1]
+	t_tgt     = arc_total[:, None] * np.linspace(0, 1, n, endpoint=False)[None, :]
 	scale     = float(arc_total.max()) + 1.0
 	row_off   = np.arange(M, dtype=float) * scale
 	idx_g = np.searchsorted(
@@ -87,14 +53,26 @@ def nuage_iso(I, t, dt, n, V, P, n_dense=180):
 	rows  = np.arange(M)[:, None]
 	t0_   = arc[rows, loc - 1];  t1_ = arc[rows, loc]
 	alpha = (t_tgt - t0_) / np.maximum(t1_ - t0_, 1e-15)
-	all_x = dx_cl[rows, loc - 1] + alpha * (dx_cl[rows, loc] - dx_cl[rows, loc - 1]) + I[:, 0:1]
-	all_y = dy_cl[rows, loc - 1] + alpha * (dy_cl[rows, loc] - dy_cl[rows, loc - 1]) + I[:, 1:2]
+	all_x = dx_cl[rows, loc - 1] + alpha * (dx_cl[rows, loc] - dx_cl[rows, loc - 1])
+	all_y = dy_cl[rows, loc - 1] + alpha * (dy_cl[rows, loc] - dy_cl[rows, loc - 1])
+	return all_x, all_y  # (M, n)
+
+
+def iso_point(p, t, dt, n, V, P, n_dense=180):
+	return nuage_iso(np.array([p]), t, dt, n, V, P, n_dense)
+
+
+def nuage_iso(I, t, dt, n, V, P, n_dense=180):
+	M    = len(I)
+	wind = V(I, t)
+	dx_dense, dy_dense = _polar_offsets_batch(wind[:, 0], wind[:, 1], dt, P, n_dense)
+	all_x, all_y = _arc_resample_batch(dx_dense, dy_dense, n)
+	all_x += I[:, 0:1]
+	all_y += I[:, 1:2]
 
 	index_iso     = np.repeat(I[:, 2] + 1, n)
 	index_origine = np.repeat(np.arange(M, dtype=float), n)
-
 	points = np.column_stack([all_x.ravel(), all_y.ravel(), index_iso, index_origine])
-
 	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
 	return points[idx_unique]
 
