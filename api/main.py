@@ -220,7 +220,20 @@ class RoutingRequest(BaseModel):
     n:       int   = 100
     ang_deg:  float = 90.0
     dang_deg: float = 0.3
+    polar_pct: float = 100.0  # pourcentage de performance polaire (100 = nominal)
     wind_uniform: Optional[WindUniform] = None
+
+
+def _scale_polar(P, pct: float):
+    """Retourne une fonction polaire dont les vitesses sont multipliées par pct/100."""
+    if pct == 100.0:
+        return P
+    factor = pct / 100.0
+    base = P
+    def scaled(ang, v, _f=factor, _b=base):
+        return _b(ang, v) * _f
+    scaled.v_max = base.v_max * factor
+    return scaled
 
 
 def _build_isochrones(L, grib_file=None):
@@ -272,7 +285,7 @@ def run_routing(req: RoutingRequest):
         if not grib_path.exists():
             raise HTTPException(404, "GRIB introuvable")
         V = _get_V(str(grib_path))
-    P = _get_P(str(pol_path))
+    P = _scale_polar(_get_P(str(pol_path)), req.polar_pct)
 
     p_dep = [req.p_dep[0], req.p_dep[1]]
     p_arr = [req.p_arr[0], req.p_arr[1]]
@@ -328,7 +341,7 @@ def run_routing_stream(req: RoutingRequest):
         if not grib_path.exists():
             raise HTTPException(404, "GRIB introuvable")
         V = _get_V(str(grib_path))
-    P = _get_P(str(pol_path))
+    P = _scale_polar(_get_P(str(pol_path)), req.polar_pct)
 
     p_dep = [req.p_dep[0], req.p_dep[1]]
     p_arr = [req.p_arr[0], req.p_arr[1]]

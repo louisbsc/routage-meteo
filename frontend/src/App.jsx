@@ -111,6 +111,7 @@ export default function App() {
   const [params, setParams]         = useState({
     dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3,
   });
+  const [polarPct, setPolarPct]     = useState(100);
 
   // ── Init ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -197,6 +198,7 @@ export default function App() {
         p_dep: depPoint, p_arr: arrPoint,
         t: windMode === 'grib' ? (meta?.times?.[depTimeIdx] ?? 0) : 0,
         ...params,
+        polar_pct: polarPct,
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
@@ -479,9 +481,19 @@ export default function App() {
             Polaire
           </div>
           <label style={labelStyle}>Fichier polaire</label>
-          <select value={polaire} onChange={e => setPolaire(e.target.value)} style={inputStyle}>
+          <select value={polaire} onChange={e => setPolaire(e.target.value)}
+            style={{ ...inputStyle, marginBottom: 12 }}>
             {polaires.map(p => <option key={p} value={p}>{p.replace('.csv', '')}</option>)}
           </select>
+          <label style={labelStyle}>
+            Performance polaire&nbsp;
+            <strong style={{ color: polarPct < 100 ? '#ff8080' : polarPct > 100 ? '#3ddc84' : '#4fc3f7' }}>
+              {polarPct}%
+            </strong>
+          </label>
+          <input type="range" min={50} max={150} step={5} value={polarPct}
+            onChange={e => setPolarPct(+e.target.value)}
+            style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
         </div>
 
         {/* ── Carte routage ────────────────────────────────────────── */}
