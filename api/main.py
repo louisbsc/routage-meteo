@@ -19,7 +19,12 @@ from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, ve
 from shapely import contains_xy
 from inputs.polaires import polaire as load_polaire   # noqa: E402
 from core.isochrone import routage                    # noqa: E402
-from inputs.courants import table as current_table, courant_grib_deg as load_courant_deg  # noqa: E402
+from inputs.courants import (  # noqa: E402
+    table as current_table,
+    courant_grib_deg as load_courant_deg,
+    courant_grib_nm  as load_courant_nm,
+    courant_uniforme,
+)
 
 app = FastAPI()
 app.add_middleware(
@@ -40,7 +45,8 @@ _grid_cache: dict = {}   # (filename, stride) → (la, lo)
 _p_cache:    dict = {}
 
 _cd_cache:    dict = {}  # current: filename → DataFrame
-_cv_cache:    dict = {}  # current: grib_path → courant function
+_cv_cache:    dict = {}  # current: grib_path → courant_grib_deg (display)
+_cv_nm_cache: dict = {}  # current: grib_path → courant_grib_nm  (routing)
 _cgrid_cache: dict = {}  # current: (filename, stride) → (la, lo)
 
 
@@ -208,6 +214,13 @@ def _get_courant(grib_path: str):
     return _cv_cache[grib_path]
 
 
+def _get_courant_nm(grib_path: str):
+    """Courant interpolé en coordonnées NM (pour le routage)."""
+    if grib_path not in _cv_nm_cache:
+        _cv_nm_cache[grib_path] = load_courant_nm(grib_path)
+    return _cv_nm_cache[grib_path]
+
+
 def _get_current_grid(filename: str, stride: int):
     key = (filename, stride)
     if key not in _cgrid_cache:
@@ -290,8 +303,8 @@ class WindUniform(BaseModel):
     force:     float   # nœuds
 
 class RoutingRequest(BaseModel):
-    grib_file:    Optional[str] = None
-    polaire_file: str
+    grib_file:          Optional[str] = None
+    polaire_file:       str
     p_dep:   List[float]   # [lat, lon] en degrés -180/180
     p_arr:   List[float]
     t:       float = 0.0   # heure de départ (offset GRIB)
@@ -299,8 +312,22 @@ class RoutingRequest(BaseModel):
     n:       int   = 100
     ang_deg:  float = 90.0
     dang_deg: float = 0.3
-    polar_pct: float = 100.0  # pourcentage de performance polaire (100 = nominal)
-    wind_uniform: Optional[WindUniform] = None
+    polar_pct: float = 100.0
+    wind_uniform:    Optional[WindUniform] = None
+    grib_courant_file: Optional[str] = None
+    courant_uniform:   Optional[WindUniform] = None  # même structure direction/force
+
+
+def _build_courant(req: "RoutingRequest"):
+    """Construit la fonction courant C(p, t) pour le routage, ou None si absent."""
+    if req.courant_uniform:
+        return courant_uniforme(req.courant_uniform.direction, req.courant_uniform.force)
+    if req.grib_courant_file:
+        path = GRIB_COURANT_DIR / req.grib_courant_file
+        if not path.exists():
+            raise HTTPException(404, "GRIB courant introuvable")
+        return _get_courant_nm(str(path))
+    return None
 
 
 def _scale_polar(P, pct: float):
@@ -373,12 +400,15 @@ def run_routing(req: RoutingRequest):
        contains_xy(land_geom, req.p_arr[1], req.p_arr[0]):
         raise HTTPException(400, "Point à terre")
 
+    C = _build_courant(req)
+
     t0 = time.perf_counter()
     lat, lon, time_list, L = routage(
         p_dep, p_arr, req.t,
         dt=req.dt, n=req.n, V=V, P=P,
         ang=math.radians(req.ang_deg),
         dang=math.radians(req.dang_deg),
+        C=C,
     )
     calc_time_s = round(time.perf_counter() - t0, 2)
 
@@ -429,6 +459,8 @@ def run_routing_stream(req: RoutingRequest):
        contains_xy(land_geom, req.p_arr[1], req.p_arr[0]):
         raise HTTPException(400, "Point à terre")
 
+    C = _build_courant(req)
+
     q = _queue.Queue()
 
     def _progress(pct):
@@ -442,7 +474,8 @@ def run_routing_stream(req: RoutingRequest):
                 dt=req.dt, n=req.n, V=V, P=P,
                 ang=math.radians(req.ang_deg),
                 dang=math.radians(req.dang_deg),
-                        progress_cb=_progress,
+                C=C,
+                progress_cb=_progress,
             )
             calc_time_s = round(time.perf_counter() - t0, 2)
             route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]

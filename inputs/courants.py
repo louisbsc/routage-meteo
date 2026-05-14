@@ -187,3 +187,24 @@ def courant_grib_deg(path):
         return result if batch else result[0]
 
     return courant
+
+
+def courant_uniforme(direction, force):
+    """Courant uniforme. Convention identique au vent : direction = provenance (°), force en nœuds."""
+    dir_  = float(direction)
+    force_ = float(force)
+
+    def courant(p, t):
+        p = np.asarray(p)
+        batch = p.ndim == 2
+        xs = p[:, 0] if batch else p[0:1]
+        ys = p[:, 1] if batch else p[1:2]
+        dirs   = np.full(len(xs), dir_)
+        forces = np.full(len(xs), force_)
+        land = contains_xy(land_geom, xs / (60.0 * 0.7), ys / 60.0)
+        dirs[land]   = 0.0
+        forces[land] = 0.0
+        result = np.column_stack([dirs, forces])
+        return result if batch else result[0]
+
+    return courant

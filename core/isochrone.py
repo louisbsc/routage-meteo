@@ -58,14 +58,43 @@ def _arc_resample_batch(dx_dense, dy_dense, n):
 	return all_x, all_y  # (M, n)
 
 
-def iso_point(p, t, dt, n, V, P, n_dense=180):
-	return nuage_iso(np.array([p]), t, dt, n, V, P, n_dense)
+def iso_point(p, t, dt, n, V, P, C=None, n_dense=180):
+	return nuage_iso(np.array([p]), t, dt, n, V, P, C=C, n_dense=n_dense)
 
 
-def nuage_iso(I, t, dt, n, V, P, n_dense=180):
+def nuage_iso(I, t, dt, n, V, P, C=None, n_dense=180):
 	M    = len(I)
-	wind = V(I, t)
-	dx_dense, dy_dense = _polar_offsets_batch(wind[:, 0], wind[:, 1], dt, P, n_dense)
+	wind = V(I, t)  # (M, 2) : [dir_from, speed]
+
+	if C is not None:
+		current = C(I, t)  # (M, 2) : [dir_from, speed]
+		# Composantes (est, nord) en nœuds – convention "provenance" → signe négatif
+		d_w = np.radians(wind[:, 0])
+		d_c = np.radians(current[:, 0])
+		u_wind = -wind[:, 1] * np.sin(d_w)
+		v_wind = -wind[:, 1] * np.cos(d_w)
+		u_cur  = -current[:, 1] * np.sin(d_c)
+		v_cur  = -current[:, 1] * np.cos(d_c)
+		# Vent surface = vent météo − vecteur courant
+		u_surf = u_wind - u_cur
+		v_surf = v_wind - v_cur
+		surf_speed = np.sqrt(u_surf**2 + v_surf**2)
+		# Direction provenance du vent surface (même convention que vent_grib_nm)
+		surf_dir = (np.degrees(np.arctan2(u_surf, v_surf)) + 180) % 360
+		# Dérive courant sur le pas de temps (unités coord = NM)
+		dx_cur = u_cur * dt
+		dy_cur = v_cur * dt
+	else:
+		surf_speed = wind[:, 1]
+		surf_dir   = wind[:, 0]
+		dx_cur = np.zeros(M)
+		dy_cur = np.zeros(M)
+
+	dx_dense, dy_dense = _polar_offsets_batch(surf_dir, surf_speed, dt, P, n_dense)
+	# Déplacement fond = déplacement eau + dérive courant
+	dx_dense += dx_cur[:, None]
+	dy_dense += dy_cur[:, None]
+
 	all_x, all_y = _arc_resample_batch(dx_dense, dy_dense, n)
 	all_x += I[:, 0:1]
 	all_y += I[:, 1:2]
@@ -76,23 +105,9 @@ def nuage_iso(I, t, dt, n, V, P, n_dense=180):
 	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
 	return points[idx_unique]
 
-def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang):
-	L = nuage_iso(I, t, dt, n, V, P)
+def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, C=None):
+	L = nuage_iso(I, t, dt, n, V, P, C=C)
 	return env.enveloppe(L, r, p_dep, p_arr, ang, r)
-
-def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang):
-	I0 = np.array([p_dep], dtype=float)
-	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
-	I = iso_point(p_dep, t, dt, n, V, P)
-	L = [I0, I]
-	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
-	for _ in range(N - 1):
-		t += dt
-		ang -= dang
-		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang)
-		L.append(I)
-		print(f"nombre isochrones : {len(L) - 1}, temps écoulé : {t + dt:.2f} heures, nombre de points : {len(I)}")
-	return np.vstack(L)
 
 def iso_est_arrive(I, p_arr, e_arr):
 	distances = f.distance_np(I, p_arr)
@@ -103,14 +118,14 @@ def point_qui_est_arrive(l, p_arr, e_arr):
 	distances = f.distance_np(l, p_arr)
 	return l[np.argmin(distances)]
 
-def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, progress_cb=None):
+def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, C=None, progress_cb=None):
 	time_list = np.array([t], dtype=int)
 	p_arr = np.array(p_arr, dtype=float)
 	I0 = np.array([p_dep], dtype=float)
 	if progress_cb is not None:
 		_dist_total = max(float(np.linalg.norm(p_arr[:2] - np.array(p_dep[:2]))), 1e-6)
 	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
-	I = iso_point(p_dep, t, dt, n, V, P)
+	I = iso_point(p_dep, t, dt, n, V, P, C=C)
 	I = env.enveloppe(I, r, p_dep, p_arr, ang, r)
 	L = [I0, I]
 	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
@@ -118,7 +133,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, progress_cb=No
 		t += dt
 		ang -= dang
 		time_list = np.append(time_list, t)
-		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, C=C)
 		L.append(I)
 		print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 		if progress_cb is not None:
@@ -135,38 +150,21 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, progress_cb=No
 		p_final = p
 	return L, np.array(route)[::-1], time_list
 
-def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, progress_cb=None):
-	# p_dep[1] = 360 - p_dep[1]
-	# p_arr[1] = 360 - p_arr[1]
+def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, C=None, progress_cb=None):
 	p_dep = [p_dep[1] * 60 * 0.7, p_dep[0] * 60, 0, 0]
 	p_arr = [p_arr[1] * 60 * 0.7, p_arr[0] * 60]
 
-	# R = 3443.9184665
-	# p_dep = [R * p_dep[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_dep[0] * np.pi / 360)), 0, 0]
-	# p_arr = [R * p_arr[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_arr[0] * np.pi / 360))]
-
 	e_arr = P.v_max * dt / 2
 	r = P.v_max * dt * 2 * np.pi / n
-	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, progress_cb=progress_cb)
-	
-	latitude = route[:, 1] / 60
+	L, route, time_list = toutes_iso(
+		p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang,
+		C=C, progress_cb=progress_cb,
+	)
+
+	latitude  = route[:, 1] / 60
 	longitude = route[:, 0] / (60 * 0.7)
 
-	# x = route[:, 0]
-	# y = route[:, 1]
-	# lon_rad = x / R
-	# lat_rad = 2 * np.arctan(np.exp(y / R)) - np.pi / 2
-	# longitude = np.degrees(lon_rad)
-	# latitude = np.degrees(lat_rad)
-
-	
 	L[:, 0], L[:, 1] = L[:, 1] / 60, L[:, 0] / (60 * 0.7)
-	# x = L[:, 0]
-	# y = L[:, 1]
-	# lon_rad = x / R
-	# lat_rad = 2 * np.arctan(np.exp(y / R)) - np.pi / 2
-	# L[:, 0] = np.degrees(lon_rad)
-	# L[:, 1] = np.degrees(lat_rad)
 
 	return latitude, longitude, time_list, L
 

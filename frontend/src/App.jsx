@@ -245,6 +245,11 @@ export default function App() {
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
+        ...(currentMode === 'uniform'
+          ? { courant_uniform: { direction: uniformCurrent.direction, force: uniformCurrent.force } }
+          : currentFile
+          ? { grib_courant_file: currentFile }
+          : {}),
       };
       const res = await fetch(`${API}/routing/stream`, {
         method: 'POST',
