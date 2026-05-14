@@ -229,6 +229,54 @@ export default function App() {
     return null;
   }, [routeResult, currentTimeH]);
 
+  // ── Infos bateau à l'instant courant ──────────────────────────────────
+  const boatInfo = useMemo(() => {
+    const tl = routeResult?.time_list;
+    const rt = routeResult?.route;
+    if (!tl || !rt || tl.length < 2 || !boatPosition) return null;
+
+    let i = 0;
+    for (; i < tl.length - 1; i++) {
+      if (currentTimeH >= tl[i] && currentTimeH < tl[i + 1]) break;
+    }
+    if (i >= tl.length - 1) return null;
+
+    const [lon1, lat1] = rt[i];
+    const [lon2, lat2] = rt[i + 1];
+    const dt = tl[i + 1] - tl[i];
+
+    // Cap (Nord = 0°, Est = 90°)
+    const midLatRad = ((lat1 + lat2) / 2) * Math.PI / 180;
+    const dx = (lon2 - lon1) * Math.cos(midLatRad);
+    const dy = lat2 - lat1;
+    const heading = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+
+    // Vitesse sur l'eau (nœuds)
+    const speed = Math.sqrt((dy * 60) ** 2 + (dx * 60) ** 2) / dt;
+    if (!isFinite(speed)) return null;
+
+    // Vent au point le plus proche du bateau
+    const [bLon, bLat] = boatPosition;
+    let windSpeed = null, windDir = null;
+    if (windMode === 'uniform') {
+      windSpeed = uniformWind.force;
+      windDir   = uniformWind.direction;
+    } else if (windData.length) {
+      let minD = Infinity;
+      for (const w of windData) {
+        const d = (w.lat - bLat) ** 2 + (w.lon - bLon) ** 2;
+        if (d < minD) { minD = d; windSpeed = w.speed; windDir = w.dir; }
+      }
+    }
+
+    // Angle au vent (0° = face au vent, 180° = vent arrière)
+    const angVent = windDir != null
+      ? Math.abs((((windDir - heading + 180) % 360) + 360) % 360 - 180)
+      : null;
+
+    return { speed, windSpeed, angVent };
+  }, [routeResult, boatPosition, currentTimeH, windMode, uniformWind, windData]);
+
   // ── Computed ──────────────────────────────────────────────────────────
   const timeLabel = useMemo(() => {
     if (!meta) return '—';
@@ -260,6 +308,32 @@ export default function App() {
         clickMode={clickMode}
         onMapClick={handleMapClick}
       />
+
+      {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
+      {routeResult && boatInfo && (
+        <div style={{
+          position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 10, pointerEvents: 'none',
+          background: 'rgba(8,13,30,0.88)', backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(100,160,255,0.15)', borderRadius: 12,
+          padding: '10px 28px', boxShadow: '0 8px 32px rgba(0,0,30,0.6)',
+          fontFamily: FONT, display: 'flex', gap: 36, alignItems: 'center',
+          whiteSpace: 'nowrap',
+        }}>
+          {[
+            ['Vit. bateau',   `${boatInfo.speed.toFixed(1)} kt`],
+            ['Vit. vent',     boatInfo.windSpeed != null ? `${boatInfo.windSpeed.toFixed(1)} kt` : '—'],
+            ['Angle au vent', boatInfo.angVent   != null ? `${Math.round(boatInfo.angVent)}°`    : '—'],
+          ].map(([lbl, val]) => (
+            <div key={lbl} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 2, color: '#c8d8ff' }}>{lbl}</div>
+              <div style={{ fontSize: 18, color: '#4fc3f7', fontWeight: 'bold', fontVariantNumeric: 'tabular-nums' }}>
+                {val}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ══ Sidebar gauche ══════════════════════════════════════════════════ */}
       <div style={{
