@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import sys
 import math
 import numpy as np
@@ -10,7 +10,8 @@ import pandas as pd
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg  # noqa: E402
+from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
+from shapely import contains_xy
 from inputs.polaires import polaire as load_polaire   # noqa: E402
 from core.isochrone import routage                    # noqa: E402
 
@@ -156,6 +157,32 @@ def get_interpolated(filename: str, t: float, stride: int = 2):
     return {"time_h": float(t), "data": df_out.to_dict(orient="records")}
 
 
+# ── endpoint grille vent uniforme ───────────────────────────────────────────
+
+@app.get("/wind/uniform/grid")
+def uniform_grid(
+    lat0: float, lat1: float, lon0: float, lon1: float,
+    step: float = 1.0,
+    direction: float = 270,
+    force: float = 15,
+):
+    lat_start = math.ceil(lat0 / step) * step
+    lon_start = math.ceil(lon0 / step) * step
+    lats = np.arange(lat_start, lat1 + step / 2, step)
+    lons = np.arange(lon_start, lon1 + step / 2, step)
+    if lats.size == 0 or lons.size == 0:
+        return {"data": []}
+    lo, la = np.meshgrid(lons, lats)
+    la_f = la.ravel().astype(float)
+    lo_f = lo.ravel().astype(float)
+    sea = ~contains_xy(land_geom, lo_f, la_f)
+    return {"data": [
+        {"lat": round(float(la_f[i]), 4), "lon": round(float(lo_f[i]), 4),
+         "dir": direction, "speed": force}
+        for i in np.where(sea)[0]
+    ]}
+
+
 # ── endpoints routage ───────────────────────────────────────────────────────
 
 @app.get("/polaires")
@@ -163,32 +190,39 @@ def list_polaires():
     return sorted(f.name for f in POLAIRE_DIR.glob("*.csv"))
 
 
+class WindUniform(BaseModel):
+    direction: float   # degrés (convention météo : d'où vient le vent)
+    force:     float   # nœuds
+
 class RoutingRequest(BaseModel):
-    grib_file:    str
+    grib_file:    Optional[str] = None
     polaire_file: str
     p_dep:   List[float]   # [lat, lon] en degrés -180/180
     p_arr:   List[float]
     t:       float = 0.0   # heure de départ (offset GRIB)
     dt:      float = 1.0
     n:       int   = 100
-    e_arr:   float = 20.0
-    r:       float = 2.0
     ang_deg:  float = 90.0
     dang_deg: float = 0.3
     delta:   float = 2.0
+    wind_uniform: Optional[WindUniform] = None
 
 
 @app.post("/routing")
 def run_routing(req: RoutingRequest):
-    grib_path = GRIB_DIR / req.grib_file
-    pol_path  = POLAIRE_DIR / req.polaire_file
-
-    if not grib_path.exists():
-        raise HTTPException(404, "GRIB introuvable")
+    pol_path = POLAIRE_DIR / req.polaire_file
     if not pol_path.exists():
         raise HTTPException(404, "Polaire introuvable")
 
-    V = _get_V(str(grib_path))
+    if req.wind_uniform:
+        V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
+    else:
+        if not req.grib_file:
+            raise HTTPException(400, "grib_file requis si wind_uniform absent")
+        grib_path = GRIB_DIR / req.grib_file
+        if not grib_path.exists():
+            raise HTTPException(404, "GRIB introuvable")
+        V = _get_V(str(grib_path))
     P = _get_P(str(pol_path))
 
     p_dep = [req.p_dep[0], req.p_dep[1]]
@@ -197,7 +231,6 @@ def run_routing(req: RoutingRequest):
     lat, lon, time_list, L = routage(
         p_dep, p_arr, req.t,
         dt=req.dt, n=req.n, V=V, P=P,
-        e_arr=req.e_arr, r=req.r,
         ang=math.radians(req.ang_deg),
         dang=math.radians(req.dang_deg),
         delta=req.delta,

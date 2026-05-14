@@ -6,6 +6,22 @@ from math import *
 def vent_constant(p, t):
 	return 0, 5
 
+def vent_uniforme(direction, force):
+	dir_, force_ = float(direction), float(force)
+	def vent(p, t):
+		p = np.asarray(p)
+		batch = p.ndim == 2
+		xs = p[:, 0] if batch else p[0:1]
+		ys = p[:, 1] if batch else p[1:2]
+		dirs   = np.full(len(xs), dir_)
+		forces = np.full(len(xs), force_)
+		land = contains_xy(land_geom, xs / (60.0 * 0.7), ys / 60.0)
+		dirs[land]   = 0.0
+		forces[land] = 0.0
+		result = np.column_stack([dirs, forces])
+		return result if batch else result[0]
+	return vent
+
 def vent_circulaire(p, t):
     x, y = p[0], p[1]
 

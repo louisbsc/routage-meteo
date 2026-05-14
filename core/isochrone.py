@@ -60,7 +60,7 @@ def nuage_iso(I, t, dt, n, V, P, n_dense=3600):
 	cos_dense = np.cos(np.pi / 2 - np.radians(cap_dense))
 	sin_dense = np.sin(np.pi / 2 - np.radians(cap_dense))
 
-	ang_dense = (cap_dense[None, :] - dir_vent[:, None]) % 360 - 180  # (M, n_dense)
+	ang_dense = (cap_dense[None, :] - dir_vent[:, None] + 180) % 360 - 180  # (M, n_dense)
 	vit_dense = P(ang_dense.ravel(), np.repeat(vit_vent, n_dense)).reshape(M, n_dense)
 
 	dx_dense = vit_dense * dt * cos_dense[None, :]  # (M, n_dense)
@@ -142,7 +142,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 		p_final = p
 	return L, np.array(route)[::-1], time_list
 
-def routage(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
+def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, delta):
 	# p_dep[1] = 360 - p_dep[1]
 	# p_arr[1] = 360 - p_arr[1]
 	p_dep = [p_dep[1] * 60 * 0.7, p_dep[0] * 60, 0, 0]
@@ -152,7 +152,8 @@ def routage(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta):
 	# p_dep = [R * p_dep[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_dep[0] * np.pi / 360)), 0, 0]
 	# p_arr = [R * p_arr[1] * np.pi / 180, R * np.log(np.tan(np.pi/4 + p_arr[0] * np.pi / 360))]
 
-	
+	e_arr = P.v_max * dt / 2
+	r = P.v_max * dt * 2 * np.pi / n
 	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta)
 	
 	latitude = route[:, 1] / 60

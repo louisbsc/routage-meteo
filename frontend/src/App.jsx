@@ -90,6 +90,10 @@ export default function App() {
   const [windData, setWindData]     = useState([]);
   const [windLoading, setWindLoading] = useState(false);
   const [viewState, setViewState]   = useState(INIT_VIEW);
+  const [windMode, setWindMode]       = useState('grib');  // 'grib' | 'uniform'
+  const [uniformWind, setUniformWind] = useState({ direction: 270, force: 15 });
+  const [uniformStride, setUniformStride] = useState(3);  // 1=dense … 5=sparse
+  const [uniformWindData, setUniformWindData] = useState([]);
 
   // Routing
   const [polaires, setPolaires]     = useState([]);
@@ -104,7 +108,7 @@ export default function App() {
   const [showIsochrones, setShowIsochrones] = useState(true);
   const [advOpen, setAdvOpen]       = useState(false);
   const [params, setParams]         = useState({
-    dt: 1, n: 100, e_arr: 20, r: 2, ang_deg: 90, dang_deg: 0.3, delta: 2,
+    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3, delta: 2,
   });
 
   // ── Init ──────────────────────────────────────────────────────────────
@@ -161,18 +165,23 @@ export default function App() {
     setClickMode(m => m === mode ? null : mode);
 
   const runRouting = async () => {
-    if (!file || !depPoint || !arrPoint || !polaire) return;
+    if (!depPoint || !arrPoint || !polaire) return;
+    if (windMode === 'grib' && !file) return;
     setRouting(true); setRouteResult(null); setRouteError(null);
     try {
+      const body = {
+        polaire_file: polaire,
+        p_dep: depPoint, p_arr: arrPoint,
+        t: windMode === 'grib' ? (meta?.times?.[depTimeIdx] ?? 0) : 0,
+        ...params,
+        ...(windMode === 'uniform'
+          ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
+          : { grib_file: file }),
+      };
       const res = await fetch(`${API}/routing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          grib_file: file, polaire_file: polaire,
-          p_dep: depPoint, p_arr: arrPoint,
-          t: meta?.times?.[depTimeIdx] ?? 0,
-          ...params,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
       setRouteResult(await res.json());
@@ -182,6 +191,26 @@ export default function App() {
       setRouting(false);
     }
   };
+
+  // ── Grille vent uniforme (fetch backend, ancrée en geo, sans terre) ──────
+  const UNIFORM_STEPS = [4, 2, 1, 0.5, 0.25];  // degrés selon stride 1→5
+
+  useEffect(() => {
+    if (windMode !== 'uniform') { setUniformWindData([]); return; }
+    const { longitude, latitude, zoom } = viewState;
+    const lonSpan = (360 / Math.pow(2, zoom)) * (window.innerWidth  / 256) * 1.3;
+    const latSpan = (360 / Math.pow(2, zoom)) * (window.innerHeight / 256) * 1.3;
+    const lon0 = Math.max(-180, longitude - lonSpan / 2);
+    const lon1 = Math.min(180,  longitude + lonSpan / 2);
+    const lat0 = Math.max(-85,  latitude  - latSpan / 2);
+    const lat1 = Math.min(85,   latitude  + latSpan / 2);
+    const step = UNIFORM_STEPS[uniformStride - 1];
+    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${step}&direction=${uniformWind.direction}&force=${uniformWind.force}`;
+    const timer = setTimeout(() => {
+      fetch(url).then(r => r.json()).then(({ data }) => setUniformWindData(data)).catch(() => {});
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [windMode, viewState, uniformWind, uniformStride]);
 
   // ── Position du bateau sur la route ───────────────────────────────────
   const boatPosition = useMemo(() => {
@@ -213,12 +242,12 @@ export default function App() {
   const timeOffset = meta
     ? `T+${currentTimeH}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
     : '';
-  const canRoute   = !!file && !!depPoint && !!arrPoint && !!polaire && !routing;
+  const canRoute   = (windMode === 'uniform' || !!file) && !!depPoint && !!arrPoint && !!polaire && !routing;
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#080d1a', fontFamily: FONT }}>
       <WindMap
-        data={windData}
+        data={windMode === 'uniform' ? uniformWindData : windData}
         viewState={viewState}
         onViewStateChange={setViewState}
         depPoint={depPoint}
@@ -242,7 +271,7 @@ export default function App() {
         {/* ── Carte vent ───────────────────────────────────────────── */}
         <div style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent GRIB</div>
+            <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
               <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
                 style={{ accentColor: '#4fc3f7', cursor: 'pointer' }} />
@@ -250,35 +279,79 @@ export default function App() {
             </label>
           </div>
 
-          <label style={labelStyle}>Fichier</label>
-          <select value={file} onChange={e => setFile(e.target.value)}
-            style={{ ...inputStyle, marginBottom: 12 }}>
-            <option value="">— Choisir un fichier —</option>
-            {files.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
+          {/* Toggle GRIB / Uniforme */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+            {['grib', 'uniform'].map(mode => (
+              <button key={mode} onClick={() => setWindMode(mode)}
+                style={{
+                  flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
+                  fontFamily: FONT, cursor: 'pointer',
+                  background: windMode === mode ? '#4fc3f7' : 'rgba(30,40,80,0.8)',
+                  color: windMode === mode ? '#080d1a' : '#c8d8ff',
+                  border: `1px solid ${windMode === mode ? '#4fc3f7' : 'rgba(100,160,255,0.2)'}`,
+                  transition: 'all 0.15s',
+                }}>
+                {mode === 'grib' ? 'GRIB' : 'Uniforme'}
+              </button>
+            ))}
+          </div>
 
-          {meta && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px' }}>
-              <div>
-                <label style={labelStyle}>
-                  Densité <strong style={{ color: '#4fc3f7' }}>1/{stride}</strong>
-                  <span style={{ opacity: 0.35, marginLeft: 6 }}>({windData.length.toLocaleString()})</span>
+          {windMode === 'grib' ? (
+            <>
+              <label style={labelStyle}>Fichier</label>
+              <select value={file} onChange={e => setFile(e.target.value)}
+                style={{ ...inputStyle, marginBottom: 12 }}>
+                <option value="">— Choisir un fichier —</option>
+                {files.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+              {meta && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px' }}>
+                  <div>
+                    <label style={labelStyle}>
+                      Densité <strong style={{ color: '#4fc3f7' }}>1/{stride}</strong>
+                      <span style={{ opacity: 0.35, marginLeft: 6 }}>({windData.length.toLocaleString()})</span>
+                    </label>
+                    <input type="range" min={1} max={6} value={stride}
+                      onChange={e => setStride(+e.target.value)}
+                      style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>
+                      Pas <strong style={{ color: '#4fc3f7' }}>{STEP_OPTIONS[stepIdx].label}</strong>
+                    </label>
+                    <input type="range" min={0} max={STEP_OPTIONS.length - 1} value={stepIdx}
+                      onChange={e => { setStepIdx(+e.target.value); setCurrentTimeH(meta.times[0] ?? 0); }}
+                      style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+                  </div>
+                </div>
+              )}
+              {windLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 10px', marginBottom: 10 }}>
+                <label style={{ fontSize: 11, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  Direction (°)
+                  <input type="number" min={0} max={359} step={5} value={uniformWind.direction}
+                    onChange={e => setUniformWind(w => ({ ...w, direction: +e.target.value }))}
+                    style={{ ...inputStyle, padding: '5px 8px', fontSize: 12 }} />
                 </label>
-                <input type="range" min={1} max={6} value={stride}
-                  onChange={e => setStride(+e.target.value)}
-                  style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
-              </div>
-              <div>
-                <label style={labelStyle}>
-                  Pas <strong style={{ color: '#4fc3f7' }}>{STEP_OPTIONS[stepIdx].label}</strong>
+                <label style={{ fontSize: 11, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  Force (nœuds)
+                  <input type="number" min={0} max={60} step={1} value={uniformWind.force}
+                    onChange={e => setUniformWind(w => ({ ...w, force: +e.target.value }))}
+                    style={{ ...inputStyle, padding: '5px 8px', fontSize: 12 }} />
                 </label>
-                <input type="range" min={0} max={STEP_OPTIONS.length - 1} value={stepIdx}
-                  onChange={e => { setStepIdx(+e.target.value); setCurrentTimeH(meta.times[0] ?? 0); }}
-                  style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
               </div>
-            </div>
+              <label style={labelStyle}>
+                Densité <strong style={{ color: '#4fc3f7' }}>{['très sparse', 'sparse', 'normale', 'dense', 'très dense'][uniformStride - 1]}</strong>
+                <span style={{ opacity: 0.35, marginLeft: 6 }}>({uniformWindData.length} pts)</span>
+              </label>
+              <input type="range" min={1} max={5} value={uniformStride}
+                onChange={e => setUniformStride(+e.target.value)}
+                style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+            </>
           )}
-          {windLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
         </div>
 
         {/* ── Carte polaire ─────────────────────────────────────────── */}
@@ -316,18 +389,22 @@ export default function App() {
             onToggle={() => toggleClick('arr')}
           />
 
-          {/* Date de départ */}
-          <label style={labelStyle}>Date de départ</label>
-          <select
-            value={depTimeIdx}
-            onChange={e => setDepTimeIdx(+e.target.value)}
-            style={{ ...inputStyle, marginBottom: 10 }}
-            disabled={!meta}
-          >
-            {meta?.valid_times?.map((vt, i) => (
-              <option key={i} value={i}>{fmtDatetime(vt)}</option>
-            )) ?? <option>— choisir un fichier GRIB —</option>}
-          </select>
+          {/* Date de départ (GRIB uniquement) */}
+          {windMode === 'grib' && (
+            <>
+              <label style={labelStyle}>Date de départ</label>
+              <select
+                value={depTimeIdx}
+                onChange={e => setDepTimeIdx(+e.target.value)}
+                style={{ ...inputStyle, marginBottom: 10 }}
+                disabled={!meta}
+              >
+                {meta?.valid_times?.map((vt, i) => (
+                  <option key={i} value={i}>{fmtDatetime(vt)}</option>
+                )) ?? <option>— choisir un fichier GRIB —</option>}
+              </select>
+            </>
+          )}
 
           {/* Paramètres avancés */}
           <button onClick={() => setAdvOpen(v => !v)}
@@ -345,8 +422,6 @@ export default function App() {
               {[
                 ['dt (h)',       'dt',       0.25, 6,   0.25],
                 ['n caps',       'n',        20,   360, 10  ],
-                ['e_arr (NM)',   'e_arr',    5,    200, 5   ],
-                ['r enveloppe',  'r',        0.5,  10,  0.5 ],
                 ['ang init (°)', 'ang_deg',  10,   180, 5   ],
                 ['dang/pas (°)', 'dang_deg', 0,    2,   0.05],
                 ['delta',        'delta',    1,    10,  0.5 ],

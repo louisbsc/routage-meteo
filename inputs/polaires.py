@@ -68,6 +68,7 @@ def polaire(path):
 		pts = np.column_stack((a, f_col))
 		return interpolate(pts)
 
+	polaire_func.v_max = float(boat_speeds.max())
 	return polaire_func
 
 # AFFICHAGE
