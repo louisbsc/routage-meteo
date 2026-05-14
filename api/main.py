@@ -223,6 +223,40 @@ class RoutingRequest(BaseModel):
     wind_uniform: Optional[WindUniform] = None
 
 
+def _build_isochrones(L, grib_file=None):
+    """Construit les isochrones filtrées (terre + bbox GRIB) en segments contigus."""
+    lon_min, lat_min, lon_max, lat_max = -180.0, -90.0, 180.0, 90.0
+    if grib_file:
+        df = _load(grib_file)
+        lon_min = float(df["longitude"].min())
+        lat_min = float(df["latitude"].min())
+        lon_max = float(df["longitude"].max())
+        lat_max = float(df["latitude"].max())
+    isochrones = []
+    for idx in np.unique(L[:, 2].astype(int)):
+        pts  = L[L[:, 2].astype(int) == idx]
+        lats = pts[:, 0]
+        lons = pts[:, 1]
+        in_bbox = (lons >= lon_min) & (lons <= lon_max) & \
+                  (lats >= lat_min) & (lats <= lat_max)
+        on_land = np.zeros(len(pts), dtype=bool)
+        if in_bbox.any():
+            on_land[in_bbox] = contains_xy(land_geom, lons[in_bbox], lats[in_bbox])
+        keep = in_bbox & ~on_land
+        # Découpe en segments contigus : un point supprimé brise le tracé
+        segment = []
+        for i in range(len(pts)):
+            if keep[i]:
+                segment.append([round(float(lons[i]), 4), round(float(lats[i]), 4)])
+            else:
+                if len(segment) >= 2:
+                    isochrones.append(segment)
+                segment = []
+        if len(segment) >= 2:
+            isochrones.append(segment)
+    return isochrones
+
+
 @app.post("/routing")
 def run_routing(req: RoutingRequest):
     pol_path = POLAIRE_DIR / req.polaire_file
@@ -265,14 +299,7 @@ def run_routing(req: RoutingRequest):
     hours     = (total_min % (24 * 60)) // 60
     minutes   = total_min % 60
 
-    # Isochrones : L[:, 0]=lat, L[:, 1]=lon (-180/180), L[:, 2]=index_iso
-    isochrones = []
-    for idx in np.unique(L[:, 2].astype(int)):
-        pts = L[L[:, 2].astype(int) == idx]
-        isochrones.append([
-            [round(float(lo), 4), round(float(la), 4)]
-            for lo, la in zip(pts[:, 1], pts[:, 0])
-        ])
+    isochrones = _build_isochrones(L, grib_file=req.grib_file)
 
     return {
         "route":        route,
@@ -330,13 +357,7 @@ def run_routing_stream(req: RoutingRequest):
             route_times = time_list[:len(lat)].tolist()
             duration    = float(time_list[-1] - req.t)
             total_min   = int(round(duration * 60))
-            isochrones  = []
-            for idx in np.unique(L[:, 2].astype(int)):
-                pts = L[L[:, 2].astype(int) == idx]
-                isochrones.append([
-                    [round(float(lo), 4), round(float(la), 4)]
-                    for lo, la in zip(pts[:, 1], pts[:, 0])
-                ])
+            isochrones  = _build_isochrones(L, grib_file=req.grib_file)
             q.put_nowait({"type": "result",
                 "route": route, "time_list": route_times, "isochrones": isochrones,
                 "duration_h": duration,
