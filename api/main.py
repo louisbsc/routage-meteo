@@ -1,11 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Optional
 import sys
 import math
 import time
+import json
+import queue as _queue
+import threading
 import numpy as np
 import pandas as pd
 
@@ -229,6 +233,10 @@ def run_routing(req: RoutingRequest):
     p_dep = [req.p_dep[0], req.p_dep[1]]
     p_arr = [req.p_arr[0], req.p_arr[1]]
 
+    if contains_xy(land_geom, req.p_dep[1], req.p_dep[0]) or \
+       contains_xy(land_geom, req.p_arr[1], req.p_arr[0]):
+        raise HTTPException(400, "Point à terre")
+
     t0 = time.perf_counter()
     lat, lon, time_list, L = routage(
         p_dep, p_arr, req.t,
@@ -267,3 +275,80 @@ def run_routing(req: RoutingRequest):
         "minutes":      minutes,
         "calc_time_s":  calc_time_s,
     }
+
+
+@app.post("/routing/stream")
+def run_routing_stream(req: RoutingRequest):
+    pol_path = POLAIRE_DIR / req.polaire_file
+    if not pol_path.exists():
+        raise HTTPException(404, "Polaire introuvable")
+
+    if req.wind_uniform:
+        V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
+    else:
+        if not req.grib_file:
+            raise HTTPException(400, "grib_file requis si wind_uniform absent")
+        grib_path = GRIB_DIR / req.grib_file
+        if not grib_path.exists():
+            raise HTTPException(404, "GRIB introuvable")
+        V = _get_V(str(grib_path))
+    P = _get_P(str(pol_path))
+
+    p_dep = [req.p_dep[0], req.p_dep[1]]
+    p_arr = [req.p_arr[0], req.p_arr[1]]
+
+    if contains_xy(land_geom, req.p_dep[1], req.p_dep[0]) or \
+       contains_xy(land_geom, req.p_arr[1], req.p_arr[0]):
+        raise HTTPException(400, "Point à terre")
+
+    q = _queue.Queue()
+
+    def _progress(pct):
+        q.put_nowait({"type": "progress", "pct": pct})
+
+    def _worker():
+        try:
+            t0 = time.perf_counter()
+            lat, lon, time_list, L = routage(
+                p_dep, p_arr, req.t,
+                dt=req.dt, n=req.n, V=V, P=P,
+                ang=math.radians(req.ang_deg),
+                dang=math.radians(req.dang_deg),
+                delta=req.delta,
+                progress_cb=_progress,
+            )
+            calc_time_s = round(time.perf_counter() - t0, 2)
+            route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
+            route_times = time_list[:len(lat)].tolist()
+            duration    = float(time_list[-1] - req.t)
+            total_min   = int(round(duration * 60))
+            isochrones  = []
+            for idx in np.unique(L[:, 2].astype(int)):
+                pts = L[L[:, 2].astype(int) == idx]
+                isochrones.append([
+                    [round(float(lo), 4), round(float(la), 4)]
+                    for lo, la in zip(pts[:, 1], pts[:, 0])
+                ])
+            q.put_nowait({"type": "result",
+                "route": route, "time_list": route_times, "isochrones": isochrones,
+                "duration_h": duration,
+                "days":    total_min // (24 * 60),
+                "hours":   (total_min % (24 * 60)) // 60,
+                "minutes": total_min % 60,
+                "calc_time_s": calc_time_s,
+            })
+        except Exception as e:
+            q.put_nowait({"type": "error", "detail": str(e)})
+        finally:
+            q.put_nowait(None)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    def _stream():
+        while True:
+            msg = q.get()
+            if msg is None:
+                break
+            yield json.dumps(msg) + '\n'
+
+    return StreamingResponse(_stream(), media_type="application/x-ndjson")

@@ -118,9 +118,12 @@ def _build_uv_interpolators(df, x_col, y_col):
 
 def vent_grib_nm(path):
     df = table(path)
+    t_max_grib = float(df['temps'].max())
     interp_u, interp_v = _build_uv_interpolators(df, 'x_data', 'y_data')
 
     def vent(p, t):
+        if t > t_max_grib:
+            raise ValueError("grib trop court en date")
         p = np.asarray(p)
         batch = p.ndim == 2
         xs = p[:, 0] if batch else p[0:1]

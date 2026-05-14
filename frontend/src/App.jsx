@@ -104,6 +104,7 @@ export default function App() {
   const [routeResult, setRouteResult] = useState(null);
   const [routing, setRouting]       = useState(false);
   const [routeError, setRouteError] = useState(null);
+  const [routingProgress, setRoutingProgress] = useState(0);
   const [depTimeIdx, setDepTimeIdx] = useState(0);    // index dans meta.times
   const [showIsochrones, setShowIsochrones] = useState(true);
   const [advOpen, setAdvOpen]       = useState(false);
@@ -167,7 +168,7 @@ export default function App() {
   const runRouting = async () => {
     if (!depPoint || !arrPoint || !polaire) return;
     if (windMode === 'grib' && !file) return;
-    setRouting(true); setRouteResult(null); setRouteError(null);
+    setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0);
     try {
       const body = {
         polaire_file: polaire,
@@ -178,13 +179,35 @@ export default function App() {
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
       };
-      const res = await fetch(`${API}/routing`, {
+      const res = await fetch(`${API}/routing/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
-      setRouteResult(await res.json());
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.type === 'progress') {
+            setRoutingProgress(msg.pct);
+          } else if (msg.type === 'result') {
+            const { type, ...data } = msg;
+            setRouteResult(data);
+          } else if (msg.type === 'error') {
+            throw new Error(msg.detail);
+          }
+        }
+      }
     } catch (e) {
       setRouteError(e.message);
     } finally {
@@ -522,10 +545,28 @@ export default function App() {
               color: canRoute ? 'white' : 'rgba(200,216,255,0.25)',
               border: 'none',
               marginTop: 2,
-              marginBottom: (routeResult || routing || routeError) ? 10 : 0,
+              marginBottom: routing ? 6 : (routeResult || routeError) ? 10 : 0,
             }}>
             {routing ? 'Calcul en cours…' : 'Lancer le routage'}
           </button>
+
+          {/* Barre de progression */}
+          {routing && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 4 }}>
+                <span style={{ opacity: 0.45 }}>Progression isochrones</span>
+                <span style={{ color: '#4fc3f7', fontWeight: 'bold' }}>{routingProgress}%</span>
+              </div>
+              <div style={{ background: 'rgba(100,160,255,0.12)', borderRadius: 4, height: 4, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 4,
+                  background: 'linear-gradient(90deg, #1455a4, #4fc3f7)',
+                  width: `${routingProgress}%`,
+                  transition: routingProgress > 0 ? 'width 0.5s ease' : 'none',
+                }} />
+              </div>
+            </div>
+          )}
 
           {/* Résultat */}
           {routeResult && !routing && (
