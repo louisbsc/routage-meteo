@@ -29,7 +29,7 @@ def _arc_resample(dx_dense, dy_dense, n):
 	targets = np.linspace(0, arc[-1], n, endpoint=False)
 	return np.interp(targets, arc, dx_cl), np.interp(targets, arc, dy_cl)
 
-def iso_point(p, t, dt, n, V, P, n_dense=360):
+def iso_point(p, t, dt, n, V, P, n_dense=180):
 	x, y, index_iso, index_origine = p
 	dir_vent, vit_vent = V(p, t)
 
@@ -48,7 +48,7 @@ def iso_point(p, t, dt, n, V, P, n_dense=360):
 	return points[idx_unique]
 	
 
-def nuage_iso(I, t, dt, n, V, P, n_dense=360):
+def nuage_iso(I, t, dt, n, V, P, n_dense=180):
 	M = len(I)
 
 	wind = V(I, t)
@@ -72,13 +72,23 @@ def nuage_iso(I, t, dt, n, V, P, n_dense=360):
 	seg_len = np.hypot(np.diff(dx_cl, axis=1), np.diff(dy_cl, axis=1))
 	arc = np.hstack([np.zeros((M, 1)), np.cumsum(seg_len, axis=1)])
 
-	# Re-échantillonnage à n points par courbe (boucle légère sur M)
-	all_x = np.empty((M, n))
-	all_y = np.empty((M, n))
-	for i in range(M):
-		targets = np.linspace(0, arc[i, -1], n, endpoint=False)
-		all_x[i] = np.interp(targets, arc[i], dx_cl[i]) + I[i, 0]
-		all_y[i] = np.interp(targets, arc[i], dy_cl[i]) + I[i, 1]
+	# Re-échantillonnage à n points par courbe — vectorisé (searchsorted row-offset)
+	n_arc     = arc.shape[1]                                                         # n_dense + 1
+	arc_total = arc[:, -1]                                                           # (M,)
+	t_tgt     = arc_total[:, None] * np.linspace(0, 1, n, endpoint=False)[None, :]  # (M, n)
+	scale     = float(arc_total.max()) + 1.0
+	row_off   = np.arange(M, dtype=float) * scale
+	idx_g = np.searchsorted(
+		(arc   + row_off[:, None]).ravel(),
+		(t_tgt + row_off[:, None]).ravel(),
+		side='right',
+	)
+	loc   = np.clip(idx_g - np.repeat(np.arange(M) * n_arc, n), 1, n_arc - 1).reshape(M, n)
+	rows  = np.arange(M)[:, None]
+	t0_   = arc[rows, loc - 1];  t1_ = arc[rows, loc]
+	alpha = (t_tgt - t0_) / np.maximum(t1_ - t0_, 1e-15)
+	all_x = dx_cl[rows, loc - 1] + alpha * (dx_cl[rows, loc] - dx_cl[rows, loc - 1]) + I[:, 0:1]
+	all_y = dy_cl[rows, loc - 1] + alpha * (dy_cl[rows, loc] - dy_cl[rows, loc - 1]) + I[:, 1:2]
 
 	index_iso     = np.repeat(I[:, 2] + 1, n)
 	index_origine = np.repeat(np.arange(M, dtype=float), n)
