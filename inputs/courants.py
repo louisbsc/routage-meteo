@@ -66,6 +66,7 @@ def table(path):
 
             df_step = pd.DataFrame({
                 "date":      date,
+                "run_time":  time,   # HHMM (ex: 0 → 00h, 1200 → 12h)
                 "step_h":    int(step),
                 "lat":       LAT.ravel(),
                 "lon":       LON.ravel(),
@@ -77,10 +78,10 @@ def table(path):
     df_all = pd.concat(records, ignore_index=True)
 
     # Pivoter pour avoir u et v sur la même ligne
-    df_u = df_all[df_all["u_current"].notna()][["date","step_h","lat","lon","u_current"]]
-    df_v = df_all[df_all["v_current"].notna()][["date","step_h","lat","lon","v_current"]]
+    df_u = df_all[df_all["u_current"].notna()][["date","run_time","step_h","lat","lon","u_current"]]
+    df_v = df_all[df_all["v_current"].notna()][["date","run_time","step_h","lat","lon","v_current"]]
 
-    df = pd.merge(df_u, df_v, on=["date","step_h","lat","lon"])
+    df = pd.merge(df_u, df_v, on=["date","run_time","step_h","lat","lon"])
 
     # Remplacer à nouveau au cas où il resterait des 9999 après fusion (sécurité)
     df["u_current"] = np.where(df["u_current"] == 9999, 0, df["u_current"])

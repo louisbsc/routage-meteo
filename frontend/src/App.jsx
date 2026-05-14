@@ -12,6 +12,11 @@ function fmtDatetime(iso) {
   return `${DAYS[d.getUTCDay()]} ${String(d.getUTCDate()).padStart(2, '0')} ${MONTHS[d.getUTCMonth()]}  ${String(d.getUTCHours()).padStart(2, '0')}h UTC`;
 }
 
+function fmtShort(ts_h) {
+  const d = new Date(ts_h * 3600000);
+  return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}h`;
+}
+
 function fmtCoord(pt) {
   if (!pt) return null;
   const [lat, lon] = pt;
@@ -137,39 +142,61 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!file) return;
+    if (!file) { setMeta(null); setWindData([]); return; }
     setMeta(null); setWindData([]); setRouteResult(null);
     fetch(`${API}/wind/${encodeURIComponent(file)}/meta`)
       .then(r => r.json())
       .then(m => {
-        setMeta(m); setCurrentTimeH(m.times[0] ?? 0); setDepTimeIdx(0);
+        setMeta(m);
+        setDepTimeIdx(0);
+        // currentTimeH = heures absolues depuis l'époque Unix
+        const refH = new Date(m.valid_times[0]).getTime() / 3600000;
+        setCurrentTimeH(refH + (m.times[0] ?? 0));
         const [lon0, lat0, lon1, lat1] = m.bbox;
         setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
       }).catch(() => {});
   }, [file]);
 
+  // Heures absolues (depuis époque Unix) des références vent et courant
+  const windRefH = useMemo(
+    () => meta ? new Date(meta.valid_times[0]).getTime() / 3600000 : null,
+    [meta],
+  );
+  const curRefH = useMemo(
+    () => currentMeta ? new Date(currentMeta.valid_times[0]).getTime() / 3600000 : null,
+    [currentMeta],
+  );
+
   // Index GRIB le plus proche de l'heure courante du slider
   const nearestGribIdx = useMemo(() => {
-    if (!meta) return 0;
+    if (!meta || windRefH === null) return 0;
+    const windT = currentTimeH - windRefH;
     let best = 0, bestDiff = Infinity;
     meta.times.forEach((t, i) => {
-      const d = Math.abs(t - currentTimeH);
+      const d = Math.abs(t - windT);
       if (d < bestDiff) { bestDiff = d; best = i; }
     });
     return best;
-  }, [currentTimeH, meta]);
+  }, [currentTimeH, windRefH, meta]);
 
   useEffect(() => {
-    if (!file || !meta) return;
+    if (!file || !meta || windRefH === null) return;
+    const tWind = currentTimeH - windRefH;
+    // Masquer si hors de la plage du GRIB vent
+    if (tWind < meta.times[0] || tWind > meta.times[meta.times.length - 1]) {
+      setWindData([]);
+      setWindLoading(false);
+      return;
+    }
     setWindLoading(true);
     const timer = setTimeout(() => {
-      fetch(`${API}/wind/${encodeURIComponent(file)}/interpolated?t=${currentTimeH}&stride=${stride}`)
+      fetch(`${API}/wind/${encodeURIComponent(file)}/interpolated?t=${tWind}&stride=${stride}`)
         .then(r => r.json())
         .then(({ data }) => { setWindData(data); setWindLoading(false); })
         .catch(() => setWindLoading(false));
     }, 80);
     return () => clearTimeout(timer);
-  }, [file, meta, currentTimeH, stride]);
+  }, [file, meta, currentTimeH, stride, windRefH]);
 
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
@@ -179,26 +206,36 @@ export default function App() {
       .then(r => r.json())
       .then(m => {
         setCurrentMeta(m);
-        if (!meta) setCurrentTimeH(m.times[0] ?? 0);
+        // N'initialise le slider que si aucun vent n'est chargé
+        if (!meta) {
+          const refH = new Date(m.valid_times[0]).getTime() / 3600000;
+          setCurrentTimeH(refH + (m.times[0] ?? 0));
+        }
       })
       .catch(() => {});
   }, [currentFile]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Courant : données interpolées ─────────────────────────────────────
   useEffect(() => {
-    if (!currentFile || !currentMeta) return;
-    setCurrentLoading(true);
+    if (!currentFile || !currentMeta || curRefH === null) return;
+    const tCur = currentTimeH - curRefH;
     const tMin = currentMeta.times[0];
     const tMax = currentMeta.times[currentMeta.times.length - 1];
-    const tClamped = Math.max(tMin, Math.min(tMax, currentTimeH));
+    // Masquer si hors de la plage du GRIB courant
+    if (tCur < tMin || tCur > tMax) {
+      setCurrentData([]);
+      setCurrentLoading(false);
+      return;
+    }
+    setCurrentLoading(true);
     const timer = setTimeout(() => {
-      fetch(`${API}/current/${encodeURIComponent(currentFile)}/interpolated?t=${tClamped}&stride=${currentStride}`)
+      fetch(`${API}/current/${encodeURIComponent(currentFile)}/interpolated?t=${tCur}&stride=${currentStride}`)
         .then(r => r.json())
         .then(({ data }) => { setCurrentData(data); setCurrentLoading(false); })
         .catch(() => setCurrentLoading(false));
     }, 80);
     return () => clearTimeout(timer);
-  }, [currentFile, currentMeta, currentTimeH, currentStride]);
+  }, [currentFile, currentMeta, currentTimeH, currentStride, curRefH]);
 
   // ── Pré-sélection dt ──────────────────────────────────────────────────
   useEffect(() => {
@@ -391,19 +428,15 @@ export default function App() {
   }, [routeResult, boatPosition, currentTimeH, windMode, uniformWind, windData]);
 
   // ── Computed ──────────────────────────────────────────────────────────
+  // currentTimeH est en heures absolues depuis l'époque Unix
   const timeLabel = useMemo(() => {
-    if (meta) {
-      const ref = new Date(meta.valid_times[0]);
-      const delta = currentTimeH - meta.times[0];
-      ref.setUTCMinutes(ref.getUTCMinutes() + Math.round(delta * 60));
-      return fmtDatetime(ref.toISOString());
-    }
-    if (currentMeta) return `T+${currentTimeH}h`;
-    return '—';
+    if (!meta && !currentMeta) return '—';
+    return fmtDatetime(new Date(currentTimeH * 3600000).toISOString());
   }, [meta, currentMeta, currentTimeH]);
 
+  const windT = windRefH !== null ? (currentTimeH - windRefH) : 0;
   const timeOffset = meta
-    ? `T+${currentTimeH}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
+    ? `T+${windT.toFixed(1)}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
     : '';
   const canRoute   = (windMode === 'uniform' || !!file) && !!depPoint && !!arrPoint && !!polaire && !routing;
 
@@ -454,9 +487,11 @@ export default function App() {
 
       {/* ══ Sidebar gauche ══════════════════════════════════════════════════ */}
       <div style={{
-        position: 'absolute', top: 16, left: 16, zIndex: 10,
+        position: 'absolute', top: 0, left: 16, zIndex: 10,
         display: 'flex', flexDirection: 'column', gap: 10,
-        maxHeight: 'calc(100vh - 80px)', overflowY: 'auto', scrollbarWidth: 'none',
+        width: 300,
+        maxHeight: `calc(100vh - 16px - ${(meta || currentMeta) ? 40 : 0}px)`,
+        overflowY: 'auto', scrollbarWidth: 'none',
       }}>
 
         {/* ── Carte vent ───────────────────────────────────────────── */}
@@ -777,35 +812,110 @@ export default function App() {
 
 {/* ══ Barre de temps ══════════════════════════════════════════════════ */}
       {(meta || currentMeta) && (() => {
-        const effectiveMeta = meta || currentMeta;
-        const tMin = effectiveMeta.times[0];
-        const tMax = effectiveMeta.times[effectiveMeta.times.length - 1];
+        // Plage du slider : union des deux fichiers en heures absolues
+        const candidates = [
+          ...(meta        && windRefH !== null ? [windRefH + meta.times[0],        windRefH + meta.times[meta.times.length - 1]]               : []),
+          ...(currentMeta && curRefH  !== null ? [curRefH  + currentMeta.times[0], curRefH  + currentMeta.times[currentMeta.times.length - 1]] : []),
+        ];
+        const sliderMin = Math.min(...candidates);
+        const sliderMax = Math.max(...candidates);
+        const sliderRange = sliderMax - sliderMin;
+
+        // Bandes GRIB pour l'indicateur (GRIB uniquement, pas uniforme)
+        const windBand = (meta && windRefH !== null && windMode === 'grib') ? {
+          t0: windRefH + meta.times[0],
+          t1: windRefH + meta.times[meta.times.length - 1],
+          color: '#e8f2ff', opacity: 0.95, key: 'vent',
+        } : null;
+        const curBand = (currentMeta && curRefH !== null && currentMode === 'grib') ? {
+          t0: curRefH + currentMeta.times[0],
+          t1: curRefH + currentMeta.times[currentMeta.times.length - 1],
+          color: '#7fa8c0', opacity: 0.70, key: 'courant',
+        } : null;
+
+        const pct = t => ((t - sliderMin) / sliderRange * 100);
+
+        // Ticks (start + end de chaque bande), dédupliqués si confondus
+        const ticks = [
+          ...(windBand ? [
+            { t: windBand.t0, color: windBand.color },
+            { t: windBand.t1, color: windBand.color },
+          ] : []),
+          ...(curBand ? [
+            { t: curBand.t0, color: curBand.color },
+            { t: curBand.t1, color: curBand.color },
+          ] : []),
+        ].filter((tk, i, arr) =>
+          // Dédoublonner les ticks trop proches (< 0.5 % du slider)
+          arr.findIndex(o => Math.abs(pct(o.t) - pct(tk.t)) < 0.5) === i
+        );
+
         return (
           <div style={{
             position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10,
             background: 'rgba(8,13,30,0.92)', backdropFilter: 'blur(12px)',
             borderTop: '1px solid rgba(100,160,255,0.15)',
-            padding: '10px 24px 14px', fontFamily: FONT,
+            padding: '8px 24px 8px', fontFamily: FONT,
           }}>
+            {/* En-tête */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
               <strong style={{ color: '#4fc3f7', fontSize: 13 }}>{timeLabel}</strong>
               <span style={{ opacity: 0.4, fontSize: 11 }}>{timeOffset}</span>
             </div>
-            <input
-              type="range"
-              min={tMin}
-              max={tMax}
-              step={meta ? STEP_OPTIONS[stepIdx].h : 1}
-              value={currentTimeH}
-              onChange={e => setCurrentTimeH(+e.target.value)}
-              style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer', display: 'block' }}
-            />
+
+            {/* ── Barre unique : piste colorée + thumb blanc + input invisible ── */}
+            <div style={{ position: 'relative', height: 20, marginTop: 2 }}>
+              {/* Piste visuelle avec bandes GRIB */}
+              <div style={{
+                position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+                left: 0, right: 0, height: 6,
+                background: 'rgba(100,160,255,0.12)', borderRadius: 3, overflow: 'hidden',
+              }}>
+                {sliderRange > 0 && [windBand, curBand].filter(Boolean).map(b => (
+                  <div key={b.key} style={{
+                    position: 'absolute',
+                    left:  `${pct(b.t0)}%`,
+                    width: `${pct(b.t1) - pct(b.t0)}%`,
+                    top: 0, height: '100%',
+                    background: b.color, opacity: b.opacity, borderRadius: 3,
+                  }} />
+                ))}
+              </div>
+              {/* Thumb : cercle blanc */}
+              <div style={{
+                position: 'absolute', top: '50%',
+                left: `${sliderRange > 0 ? pct(currentTimeH) : 0}%`,
+                transform: 'translate(-50%, -50%)',
+                width: 12, height: 12,
+                background: 'white', borderRadius: '50%',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
+                pointerEvents: 'none', zIndex: 2,
+              }} />
+              {/* Input range invisible par-dessus pour l'interaction */}
+              <input
+                type="range"
+                min={sliderMin} max={sliderMax}
+                step={meta ? STEP_OPTIONS[stepIdx].h : 1}
+                value={currentTimeH}
+                onChange={e => setCurrentTimeH(+e.target.value)}
+                style={{
+                  position: 'absolute', top: 0, left: 0,
+                  width: '100%', height: '100%',
+                  opacity: 0, cursor: 'pointer',
+                  margin: 0, padding: 0,
+                  WebkitAppearance: 'none', appearance: 'none',
+                }}
+              />
+            </div>
+
           </div>
         );
       })()}
 
       <div style={{
-        position: 'absolute', bottom: 60, right: 16, zIndex: 10,
+        position: 'absolute',
+        bottom: (meta || currentMeta) ? 72 : 16,
+        right: 16, zIndex: 10,
         background: 'rgba(8,13,30,0.7)', borderRadius: 8, padding: '6px 12px',
         color: 'rgba(150,170,220,0.55)', fontSize: 10, fontFamily: FONT,
       }}>

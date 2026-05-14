@@ -4,6 +4,7 @@ from fastapi.responses import StreamingResponse
 from pathlib import Path
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime, timedelta, timezone
 import sys
 import math
 import time
@@ -251,9 +252,26 @@ def get_current_meta(filename: str):
     if not (GRIB_COURANT_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     df = _load_current(filename)
+
+    # Datetime de référence : date + heure du run
+    date_int = int(df["date"].iloc[0])
+    time_int = int(df["run_time"].iloc[0]) if "run_time" in df.columns else 0
+    year   = date_int // 10000
+    month  = (date_int % 10000) // 100
+    day    = date_int % 100
+    hour   = time_int // 100
+    minute = time_int % 100
+    ref_dt = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+
     times = sorted(float(t) for t in df["step_h"].unique())
+
+    def _iso(step_h):
+        dt = ref_dt + timedelta(hours=step_h)
+        return dt.isoformat()
+
     return {
-        "times": times,
+        "times":       times,
+        "valid_times": [_iso(t) for t in times],
         "bbox": [
             float(df["lon"].min()),
             float(df["lat"].min()),
