@@ -98,11 +98,11 @@ def nuage_iso(I, t, dt, n, V, P, n_dense=180):
 	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
 	return points[idx_unique]
 
-def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta):
+def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang):
 	L = nuage_iso(I, t, dt, n, V, P)
-	return env.enveloppe(L, r, p_dep, p_arr, ang, delta)
+	return env.enveloppe(L, r, p_dep, p_arr, ang, r)
 
-def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, delta):
+def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang):
 	I0 = np.array([p_dep], dtype=float)
 	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
 	I = iso_point(p_dep, t, dt, n, V, P)
@@ -111,7 +111,7 @@ def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, delta):
 	for _ in range(N - 1):
 		t += dt
 		ang -= dang
-		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang)
 		L.append(I)
 		print(f"nombre isochrones : {len(L) - 1}, temps écoulé : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	return np.vstack(L)
@@ -125,7 +125,7 @@ def point_qui_est_arrive(l, p_arr, e_arr):
 	distances = f.distance_np(l, p_arr)
 	return l[np.argmin(distances)]
 
-def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta, progress_cb=None):
+def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, progress_cb=None):
 	time_list = np.array([t], dtype=int)
 	p_arr = np.array(p_arr, dtype=float)
 	I0 = np.array([p_dep], dtype=float)
@@ -133,14 +133,14 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta, progres
 		_dist_total = max(float(np.linalg.norm(p_arr[:2] - np.array(p_dep[:2]))), 1e-6)
 	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
 	I = iso_point(p_dep, t, dt, n, V, P)
-	I = env.enveloppe(I, r, p_dep, p_arr, ang, delta)
+	I = env.enveloppe(I, r, p_dep, p_arr, ang, r)
 	L = [I0, I]
 	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	while not iso_est_arrive(I, p_arr, e_arr):
 		t += dt
 		ang -= dang
 		time_list = np.append(time_list, t)
-		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, delta)
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang)
 		L.append(I)
 		print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 		if progress_cb is not None:
@@ -157,7 +157,7 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta, progres
 		p_final = p
 	return L, np.array(route)[::-1], time_list
 
-def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, delta, progress_cb=None):
+def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, progress_cb=None):
 	# p_dep[1] = 360 - p_dep[1]
 	# p_arr[1] = 360 - p_arr[1]
 	p_dep = [p_dep[1] * 60 * 0.7, p_dep[0] * 60, 0, 0]
@@ -169,7 +169,7 @@ def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, delta, progress_cb=None):
 
 	e_arr = P.v_max * dt / 2
 	r = P.v_max * dt * 2 * np.pi / n
-	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, delta, progress_cb=progress_cb)
+	L, route, time_list = toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, progress_cb=progress_cb)
 	
 	latitude = route[:, 1] / 60
 	longitude = route[:, 0] / (60 * 0.7)

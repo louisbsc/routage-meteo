@@ -109,7 +109,7 @@ export default function App() {
   const [showIsochrones, setShowIsochrones] = useState(true);
   const [advOpen, setAdvOpen]       = useState(false);
   const [params, setParams]         = useState({
-    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3, delta: 2,
+    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3,
   });
 
   // ── Init ──────────────────────────────────────────────────────────────
@@ -155,6 +155,28 @@ export default function App() {
     }, 80);
     return () => clearTimeout(timer);
   }, [file, meta, currentTimeH, stride]);
+
+  // ── Pré-sélection dt ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!depPoint || !arrPoint || !polaire) return;
+    const [lat1, lon1] = depPoint;
+    const [lat2, lon2] = arrPoint;
+    const R = 3440.065; // rayon terrestre en milles nautiques
+    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    fetch(`${API}/polaires/${encodeURIComponent(polaire)}/stats`)
+      .then(r => r.json())
+      .then(({ v_mean }) => {
+        if (!v_mean) return;
+        const dt_raw = dist_nm / (50 * v_mean);
+        const dt = Math.min(6, Math.max(0.25, Math.round(dt_raw / 0.25) * 0.25));
+        setParams(p => ({ ...p, dt }));
+      })
+      .catch(() => {});
+  }, [depPoint, arrPoint, polaire]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const handleMapClick = useCallback(([lat, lon]) => {
@@ -521,7 +543,6 @@ export default function App() {
                 ['n caps',       'n',        20,   360, 10  ],
                 ['ang init (°)', 'ang_deg',  10,   180, 5   ],
                 ['dang/pas (°)', 'dang_deg', 0,    2,   0.05],
-                ['delta',        'delta',    1,    10,  0.5 ],
               ].map(([lbl, key, min, max, step]) => (
                 <label key={key} style={{ fontSize: 10, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {lbl}

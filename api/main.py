@@ -195,6 +195,17 @@ def list_polaires():
     return sorted(f.name for f in POLAIRE_DIR.glob("*.csv"))
 
 
+@app.get("/polaires/{filename}/stats")
+def get_polaire_stats(filename: str):
+    pol_path = POLAIRE_DIR / filename
+    if not pol_path.exists():
+        raise HTTPException(404, "Polaire introuvable")
+    df = pd.read_csv(pol_path)
+    speeds = df.iloc[:, 1:].astype(float).values
+    nonzero = speeds[speeds > 0]
+    return {"v_mean": round(float(nonzero.mean()), 2)}
+
+
 class WindUniform(BaseModel):
     direction: float   # degrés (convention météo : d'où vient le vent)
     force:     float   # nœuds
@@ -209,7 +220,6 @@ class RoutingRequest(BaseModel):
     n:       int   = 100
     ang_deg:  float = 90.0
     dang_deg: float = 0.3
-    delta:   float = 2.0
     wind_uniform: Optional[WindUniform] = None
 
 
@@ -243,7 +253,6 @@ def run_routing(req: RoutingRequest):
         dt=req.dt, n=req.n, V=V, P=P,
         ang=math.radians(req.ang_deg),
         dang=math.radians(req.dang_deg),
-        delta=req.delta,
     )
     calc_time_s = round(time.perf_counter() - t0, 2)
 
@@ -314,8 +323,7 @@ def run_routing_stream(req: RoutingRequest):
                 dt=req.dt, n=req.n, V=V, P=P,
                 ang=math.radians(req.ang_deg),
                 dang=math.radians(req.dang_deg),
-                delta=req.delta,
-                progress_cb=_progress,
+                        progress_cb=_progress,
             )
             calc_time_s = round(time.perf_counter() - t0, 2)
             route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
