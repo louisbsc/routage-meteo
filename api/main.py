@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 import sys
 import math
+import time
 import numpy as np
 import pandas as pd
 
@@ -228,6 +229,7 @@ def run_routing(req: RoutingRequest):
     p_dep = [req.p_dep[0], req.p_dep[1]]
     p_arr = [req.p_arr[0], req.p_arr[1]]
 
+    t0 = time.perf_counter()
     lat, lon, time_list, L = routage(
         p_dep, p_arr, req.t,
         dt=req.dt, n=req.n, V=V, P=P,
@@ -235,10 +237,16 @@ def run_routing(req: RoutingRequest):
         dang=math.radians(req.dang_deg),
         delta=req.delta,
     )
+    calc_time_s = round(time.perf_counter() - t0, 2)
 
     route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
     route_times = time_list[:len(lat)].tolist()
     duration    = float(time_list[-1] - req.t)
+
+    total_min = int(round(duration * 60))
+    days      = total_min // (24 * 60)
+    hours     = (total_min % (24 * 60)) // 60
+    minutes   = total_min % 60
 
     # Isochrones : L[:, 0]=lat, L[:, 1]=lon (-180/180), L[:, 2]=index_iso
     isochrones = []
@@ -250,10 +258,12 @@ def run_routing(req: RoutingRequest):
         ])
 
     return {
-        "route":       route,
-        "time_list":   route_times,
-        "isochrones":  isochrones,
-        "duration_h":  duration,
-        "days":        int(duration // 24),
-        "hours":       int(duration % 24),
+        "route":        route,
+        "time_list":    route_times,
+        "isochrones":   isochrones,
+        "duration_h":   duration,
+        "days":         days,
+        "hours":        hours,
+        "minutes":      minutes,
+        "calc_time_s":  calc_time_s,
     }

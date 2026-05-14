@@ -463,6 +463,12 @@ export default function App() {
               <div style={{ fontSize: 22, color: '#4fc3f7', fontWeight: 'bold' }}>
                 {routeResult.days > 0 && <>{routeResult.days}<span style={{ fontSize: 13, opacity: 0.7 }}>j </span></>}
                 {routeResult.hours}<span style={{ fontSize: 13, opacity: 0.7 }}>h</span>
+                {params.dt < 1 && routeResult.minutes > 0 && (
+                  <>{String(routeResult.minutes).padStart(2, '0')}<span style={{ fontSize: 13, opacity: 0.7 }}>min</span></>
+                )}
+              </div>
+              <div style={{ fontSize: 10, opacity: 0.4, marginTop: 6 }}>
+                Calcul : {routeResult.calc_time_s}s
               </div>
             </div>
           )}

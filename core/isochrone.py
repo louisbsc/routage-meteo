@@ -29,7 +29,7 @@ def _arc_resample(dx_dense, dy_dense, n):
 	targets = np.linspace(0, arc[-1], n, endpoint=False)
 	return np.interp(targets, arc, dx_cl), np.interp(targets, arc, dy_cl)
 
-def iso_point(p, t, dt, n, V, P, n_dense=3600):
+def iso_point(p, t, dt, n, V, P, n_dense=360):
 	x, y, index_iso, index_origine = p
 	dir_vent, vit_vent = V(p, t)
 
@@ -48,7 +48,7 @@ def iso_point(p, t, dt, n, V, P, n_dense=3600):
 	return points[idx_unique]
 	
 
-def nuage_iso(I, t, dt, n, V, P, n_dense=3600):
+def nuage_iso(I, t, dt, n, V, P, n_dense=360):
 	M = len(I)
 
 	wind = V(I, t)
