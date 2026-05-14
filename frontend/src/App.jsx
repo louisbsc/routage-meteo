@@ -95,6 +95,19 @@ export default function App() {
   const [uniformStride, setUniformStride] = useState(3);  // 1=dense … 5=sparse
   const [uniformWindData, setUniformWindData] = useState([]);
 
+  // Current
+  const [currentFiles, setCurrentFiles]         = useState([]);
+  const [currentFile, setCurrentFile]           = useState('');
+  const [currentMeta, setCurrentMeta]           = useState(null);
+  const [currentData, setCurrentData]           = useState([]);
+  const [currentLoading, setCurrentLoading]     = useState(false);
+  const [currentStride, setCurrentStride]       = useState(2);
+  const [showCurrent, setShowCurrent]           = useState(true);
+  const [currentMode, setCurrentMode]           = useState('grib');  // 'grib' | 'uniform'
+  const [uniformCurrent, setUniformCurrent]     = useState({ direction: 180, force: 0.5 });
+  const [uniformCurrentStride, setUniformCurrentStride] = useState(3);
+  const [uniformCurrentData, setUniformCurrentData]     = useState([]);
+
   // Routing
   const [polaires, setPolaires]     = useState([]);
   const [polaire, setPolaire]       = useState('');
@@ -116,6 +129,7 @@ export default function App() {
   // ── Init ──────────────────────────────────────────────────────────────
   useEffect(() => {
     fetch(`${API}/files`).then(r => r.json()).then(setFiles).catch(() => {});
+    fetch(`${API}/current-files`).then(r => r.json()).then(setCurrentFiles).catch(() => {});
     fetch(`${API}/polaires`).then(r => r.json()).then(list => {
       setPolaires(list);
       if (list.length > 0) setPolaire(list[0]);
@@ -156,6 +170,35 @@ export default function App() {
     }, 80);
     return () => clearTimeout(timer);
   }, [file, meta, currentTimeH, stride]);
+
+  // ── Courant : meta ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!currentFile) { setCurrentMeta(null); setCurrentData([]); return; }
+    setCurrentMeta(null); setCurrentData([]);
+    fetch(`${API}/current/${encodeURIComponent(currentFile)}/meta`)
+      .then(r => r.json())
+      .then(m => {
+        setCurrentMeta(m);
+        if (!meta) setCurrentTimeH(m.times[0] ?? 0);
+      })
+      .catch(() => {});
+  }, [currentFile]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Courant : données interpolées ─────────────────────────────────────
+  useEffect(() => {
+    if (!currentFile || !currentMeta) return;
+    setCurrentLoading(true);
+    const tMin = currentMeta.times[0];
+    const tMax = currentMeta.times[currentMeta.times.length - 1];
+    const tClamped = Math.max(tMin, Math.min(tMax, currentTimeH));
+    const timer = setTimeout(() => {
+      fetch(`${API}/current/${encodeURIComponent(currentFile)}/interpolated?t=${tClamped}&stride=${currentStride}`)
+        .then(r => r.json())
+        .then(({ data }) => { setCurrentData(data); setCurrentLoading(false); })
+        .catch(() => setCurrentLoading(false));
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [currentFile, currentMeta, currentTimeH, currentStride]);
 
   // ── Pré-sélection dt ──────────────────────────────────────────────────
   useEffect(() => {
@@ -259,6 +302,24 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [windMode, viewState, uniformWind, uniformStride]);
 
+  // ── Grille courant uniforme ───────────────────────────────────────────
+  useEffect(() => {
+    if (currentMode !== 'uniform') { setUniformCurrentData([]); return; }
+    const { longitude, latitude, zoom } = viewState;
+    const lonSpan = (360 / Math.pow(2, zoom)) * (window.innerWidth  / 256) * 1.3;
+    const latSpan = (360 / Math.pow(2, zoom)) * (window.innerHeight / 256) * 1.3;
+    const lon0 = Math.max(-180, longitude - lonSpan / 2);
+    const lon1 = Math.min(180,  longitude + lonSpan / 2);
+    const lat0 = Math.max(-85,  latitude  - latSpan / 2);
+    const lat1 = Math.min(85,   latitude  + latSpan / 2);
+    const step = UNIFORM_STEPS[uniformCurrentStride - 1];
+    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${step}&direction=${uniformCurrent.direction}&force=${uniformCurrent.force}`;
+    const timer = setTimeout(() => {
+      fetch(url).then(r => r.json()).then(({ data }) => setUniformCurrentData(data)).catch(() => {});
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [currentMode, viewState, uniformCurrent, uniformCurrentStride]);
+
   // ── Position du bateau sur la route ───────────────────────────────────
   const boatPosition = useMemo(() => {
     const tl = routeResult?.time_list;
@@ -326,13 +387,15 @@ export default function App() {
 
   // ── Computed ──────────────────────────────────────────────────────────
   const timeLabel = useMemo(() => {
-    if (!meta) return '—';
-    // Datetime de référence (premier pas GRIB) + décalage courant
-    const ref = new Date(meta.valid_times[0]);
-    const delta = currentTimeH - meta.times[0];
-    ref.setUTCMinutes(ref.getUTCMinutes() + Math.round(delta * 60));
-    return fmtDatetime(ref.toISOString());
-  }, [meta, currentTimeH]);
+    if (meta) {
+      const ref = new Date(meta.valid_times[0]);
+      const delta = currentTimeH - meta.times[0];
+      ref.setUTCMinutes(ref.getUTCMinutes() + Math.round(delta * 60));
+      return fmtDatetime(ref.toISOString());
+    }
+    if (currentMeta) return `T+${currentTimeH}h`;
+    return '—';
+  }, [meta, currentMeta, currentTimeH]);
 
   const timeOffset = meta
     ? `T+${currentTimeH}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
@@ -352,6 +415,8 @@ export default function App() {
         isochrones={routeResult?.isochrones ?? []}
         showIsochrones={showIsochrones}
         showGrib={showGrib}
+        currentData={currentMode === 'uniform' ? uniformCurrentData : currentData}
+        showCurrent={showCurrent}
         clickMode={clickMode}
         onMapClick={handleMapClick}
       />
@@ -471,6 +536,82 @@ export default function App() {
               <input type="range" min={1} max={5} value={uniformStride}
                 onChange={e => setUniformStride(+e.target.value)}
                 style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+            </>
+          )}
+        </div>
+
+        {/* ── Carte courant ────────────────────────────────────────── */}
+        <div style={card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Courant</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showCurrent} onChange={e => setShowCurrent(e.target.checked)}
+                style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
+              Afficher
+            </label>
+          </div>
+
+          {/* Toggle GRIB / Uniforme */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+            {['grib', 'uniform'].map(mode => (
+              <button key={mode} onClick={() => setCurrentMode(mode)}
+                style={{
+                  flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
+                  fontFamily: FONT, cursor: 'pointer',
+                  background: currentMode === mode ? '#60a5fa' : 'rgba(30,40,80,0.8)',
+                  color: currentMode === mode ? '#080d1a' : '#c8d8ff',
+                  border: `1px solid ${currentMode === mode ? '#60a5fa' : 'rgba(100,160,255,0.2)'}`,
+                  transition: 'all 0.15s',
+                }}>
+                {mode === 'grib' ? 'GRIB' : 'Uniforme'}
+              </button>
+            ))}
+          </div>
+
+          {currentMode === 'grib' ? (
+            <>
+              <label style={labelStyle}>Fichier</label>
+              <select value={currentFile} onChange={e => setCurrentFile(e.target.value)}
+                style={{ ...inputStyle, marginBottom: 12 }}>
+                <option value="">— Choisir un fichier —</option>
+                {currentFiles.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+              {currentMeta && (
+                <div>
+                  <label style={labelStyle}>
+                    Densité <strong style={{ color: '#60a5fa' }}>1/{currentStride}</strong>
+                    <span style={{ opacity: 0.35, marginLeft: 6 }}>({currentData.length.toLocaleString()})</span>
+                  </label>
+                  <input type="range" min={1} max={6} value={currentStride}
+                    onChange={e => setCurrentStride(+e.target.value)}
+                    style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
+                </div>
+              )}
+              {currentLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 10px', marginBottom: 10 }}>
+                <label style={{ fontSize: 11, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  Direction (°)
+                  <input type="number" min={0} max={359} step={5} value={uniformCurrent.direction}
+                    onChange={e => setUniformCurrent(c => ({ ...c, direction: +e.target.value }))}
+                    style={{ ...inputStyle, padding: '5px 8px', fontSize: 12 }} />
+                </label>
+                <label style={{ fontSize: 11, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  Force (nœuds)
+                  <input type="number" min={0} max={10} step={0.1} value={uniformCurrent.force}
+                    onChange={e => setUniformCurrent(c => ({ ...c, force: +e.target.value }))}
+                    style={{ ...inputStyle, padding: '5px 8px', fontSize: 12 }} />
+                </label>
+              </div>
+              <label style={labelStyle}>
+                Densité <strong style={{ color: '#60a5fa' }}>{['très sparse', 'sparse', 'normale', 'dense', 'très dense'][uniformCurrentStride - 1]}</strong>
+                <span style={{ opacity: 0.35, marginLeft: 6 }}>({uniformCurrentData.length} pts)</span>
+              </label>
+              <input type="range" min={1} max={5} value={uniformCurrentStride}
+                onChange={e => setUniformCurrentStride(+e.target.value)}
+                style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
             </>
           )}
         </div>
@@ -630,28 +771,33 @@ export default function App() {
       </div>
 
 {/* ══ Barre de temps ══════════════════════════════════════════════════ */}
-      {meta && (
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10,
-          background: 'rgba(8,13,30,0.92)', backdropFilter: 'blur(12px)',
-          borderTop: '1px solid rgba(100,160,255,0.15)',
-          padding: '10px 24px 14px', fontFamily: FONT,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-            <strong style={{ color: '#4fc3f7', fontSize: 13 }}>{timeLabel}</strong>
-            <span style={{ opacity: 0.4, fontSize: 11 }}>{timeOffset}</span>
+      {(meta || currentMeta) && (() => {
+        const effectiveMeta = meta || currentMeta;
+        const tMin = effectiveMeta.times[0];
+        const tMax = effectiveMeta.times[effectiveMeta.times.length - 1];
+        return (
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10,
+            background: 'rgba(8,13,30,0.92)', backdropFilter: 'blur(12px)',
+            borderTop: '1px solid rgba(100,160,255,0.15)',
+            padding: '10px 24px 14px', fontFamily: FONT,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+              <strong style={{ color: '#4fc3f7', fontSize: 13 }}>{timeLabel}</strong>
+              <span style={{ opacity: 0.4, fontSize: 11 }}>{timeOffset}</span>
+            </div>
+            <input
+              type="range"
+              min={tMin}
+              max={tMax}
+              step={meta ? STEP_OPTIONS[stepIdx].h : 1}
+              value={currentTimeH}
+              onChange={e => setCurrentTimeH(+e.target.value)}
+              style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer', display: 'block' }}
+            />
           </div>
-          <input
-            type="range"
-            min={meta.times[0]}
-            max={meta.times[meta.times.length - 1]}
-            step={STEP_OPTIONS[stepIdx].h}
-            value={currentTimeH}
-            onChange={e => setCurrentTimeH(+e.target.value)}
-            style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer', display: 'block' }}
-          />
-        </div>
-      )}
+        );
+      })()}
 
       <div style={{
         position: 'absolute', bottom: 60, right: 16, zIndex: 10,

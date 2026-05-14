@@ -27,6 +27,28 @@ function speedColor(speed) {
   return STOPS[STOPS.length - 1][1];
 }
 
+const CURRENT_STOPS = [
+  [0,   [190, 225, 255, 170]],
+  [0.3, [120, 185, 255, 195]],
+  [0.8, [50,  130, 240, 215]],
+  [1.5, [15,  70,  200, 230]],
+  [2.5, [0,   25,  155, 245]],
+  [4.0, [0,   5,   100, 255]],
+];
+
+function currentSpeedColor(speed) {
+  const s = Math.max(0, speed);
+  for (let i = 1; i < CURRENT_STOPS.length; i++) {
+    const [s0, c0] = CURRENT_STOPS[i - 1];
+    const [s1, c1] = CURRENT_STOPS[i];
+    if (s <= s1) {
+      const f = (s - s0) / (s1 - s0);
+      return c0.map((v, j) => Math.round(v + f * (c1[j] - v)));
+    }
+  }
+  return CURRENT_STOPS[CURRENT_STOPS.length - 1][1];
+}
+
 function buildIconAtlas() {
   const S = 32;
   const canvas = document.createElement('canvas');
@@ -51,10 +73,26 @@ export default function WindMap({
   data, viewState, onViewStateChange,
   depPoint, arrPoint, route, boatPosition,
   isochrones, showIsochrones, showGrib,
+  currentData, showCurrent,
   clickMode, onMapClick,
 }) {
   const layers = useMemo(() => {
     const result = [];
+
+    // ── Courant ───────────────────────────────────────────────────────────
+    if (showCurrent && currentData?.length) result.push(new IconLayer({
+      id: 'current-arrows',
+      data: currentData.filter(d => d.speed > 0.05),
+      iconAtlas, iconMapping,
+      getIcon: () => 'arrow',
+      getPosition: d => [d.lon, d.lat, 0],
+      getSize:  d => Math.min(36, 20 + d.speed * 5),
+      getAngle: d => -(d.dir + 180),
+      getColor: d => currentSpeedColor(d.speed),
+      pickable: true,
+      billboard: true,
+      updateTriggers: { getColor: currentData, getAngle: currentData, getPosition: currentData },
+    }));
 
     // ── Vent ──────────────────────────────────────────────────────────────
     if (showGrib) result.push(new IconLayer({
@@ -153,7 +191,7 @@ export default function WindMap({
     }
 
     return result;
-  }, [data, route, isochrones, showIsochrones, showGrib, depPoint, arrPoint, boatPosition]);
+  }, [data, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boatPosition]);
 
   return (
     <DeckGL
@@ -169,9 +207,11 @@ export default function WindMap({
       getCursor={({ isDragging }) =>
         clickMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab')
       }
-      getTooltip={({ object }) =>
+      getTooltip={({ object, layer }) =>
         object && {
-          html: `<b>${object.speed.toFixed(1)} nœuds</b><br/>Direction : ${object.dir.toFixed(0)}°`,
+          html: layer?.id === 'current-arrows'
+            ? `<b>${object.speed.toFixed(2)} nœuds</b><br/>Courant : ${object.dir.toFixed(0)}°`
+            : `<b>${object.speed.toFixed(1)} nœuds</b><br/>Vent : ${object.dir.toFixed(0)}°`,
           style: {
             background: 'rgba(10,12,28,0.92)', color: '#e0eaff',
             borderRadius: '6px', fontSize: '12px',

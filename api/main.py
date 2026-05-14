@@ -19,6 +19,7 @@ from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, ve
 from shapely import contains_xy
 from inputs.polaires import polaire as load_polaire   # noqa: E402
 from core.isochrone import routage                    # noqa: E402
+from inputs.courants import table as current_table, courant_grib_deg as load_courant_deg  # noqa: E402
 
 app = FastAPI()
 app.add_middleware(
@@ -28,14 +29,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-GRIB_DIR    = ROOT / "data" / "grib_vent"
-POLAIRE_DIR = ROOT / "data" / "polaires"
+GRIB_DIR         = ROOT / "data" / "grib_vent"
+GRIB_COURANT_DIR = ROOT / "data" / "grib_courant"
+POLAIRE_DIR      = ROOT / "data" / "polaires"
 
 _df_cache:   dict = {}
 _v_cache:    dict = {}
 _vd_cache:   dict = {}
 _grid_cache: dict = {}   # (filename, stride) → (la, lo)
 _p_cache:    dict = {}
+
+_cd_cache:    dict = {}  # current: filename → DataFrame
+_cv_cache:    dict = {}  # current: grib_path → courant function
+_cgrid_cache: dict = {}  # current: (filename, stride) → (la, lo)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -186,6 +192,79 @@ def uniform_grid(
          "dir": direction, "speed": force}
         for i in np.where(sea)[0]
     ]}
+
+
+# ── helpers courant ────────────────────────────────────────────────────────
+
+def _load_current(filename: str):
+    if filename not in _cd_cache:
+        _cd_cache[filename] = current_table(str(GRIB_COURANT_DIR / filename))
+    return _cd_cache[filename]
+
+
+def _get_courant(grib_path: str):
+    if grib_path not in _cv_cache:
+        _cv_cache[grib_path] = load_courant_deg(grib_path)
+    return _cv_cache[grib_path]
+
+
+def _get_current_grid(filename: str, stride: int):
+    key = (filename, stride)
+    if key not in _cgrid_cache:
+        df = _load_current(filename)
+        lats = sorted(df["lat"].unique())
+        lons = sorted(df["lon"].unique())
+        la, lo = np.meshgrid(
+            np.array(lats[::stride], dtype=float),
+            np.array(lons[::stride], dtype=float),
+            indexing='ij',
+        )
+        _cgrid_cache[key] = (la.ravel(), lo.ravel())
+    return _cgrid_cache[key]
+
+
+# ── endpoints courant ───────────────────────────────────────────────────────
+
+@app.get("/current-files")
+def list_current_files():
+    return sorted(
+        f.name for f in GRIB_COURANT_DIR.iterdir()
+        if f.suffix in ('.grb', '.grb2', '.grib', '.grib2')
+    )
+
+
+@app.get("/current/{filename}/meta")
+def get_current_meta(filename: str):
+    if not (GRIB_COURANT_DIR / filename).exists():
+        raise HTTPException(404, "File not found")
+    df = _load_current(filename)
+    times = sorted(float(t) for t in df["step_h"].unique())
+    return {
+        "times": times,
+        "bbox": [
+            float(df["lon"].min()),
+            float(df["lat"].min()),
+            float(df["lon"].max()),
+            float(df["lat"].max()),
+        ],
+    }
+
+
+@app.get("/current/{filename}/interpolated")
+def get_current_interpolated(filename: str, t: float, stride: int = 2):
+    if not (GRIB_COURANT_DIR / filename).exists():
+        raise HTTPException(404, "File not found")
+    C = _get_courant(str(GRIB_COURANT_DIR / filename))
+    la, lo = _get_current_grid(filename, stride)
+    current = C(np.column_stack([lo, la]), t)  # [[dir, force], ...]
+    df_out = pd.DataFrame({
+        "lat":   np.round(la, 4),
+        "lon":   np.round(lo, 4),
+        "dir":   np.round(current[:, 0], 1),
+        "speed": np.round(current[:, 1], 3),
+    })
+    df_out = df_out[df_out["speed"] > 0.01]
+    return {"time_h": float(t), "data": df_out.to_dict(orient="records")}
 
 
 # ── endpoints routage ───────────────────────────────────────────────────────
