@@ -120,6 +120,7 @@ export default function App() {
   const [arrPoint, setArrPoint]     = useState(null);
   const [clickMode, setClickMode]   = useState(null);  // 'dep' | 'arr' | null
   const [routeResult, setRouteResult] = useState(null);
+  const [routeDepAbsH, setRouteDepAbsH] = useState(null); // heure absolue de départ du routage
   const [routing, setRouting]       = useState(false);
   const [routeError, setRouteError] = useState(null);
   const [routingProgress, setRoutingProgress] = useState(0);
@@ -135,10 +136,7 @@ export default function App() {
   useEffect(() => {
     fetch(`${API}/files`).then(r => r.json()).then(setFiles).catch(() => {});
     fetch(`${API}/current-files`).then(r => r.json()).then(setCurrentFiles).catch(() => {});
-    fetch(`${API}/polaires`).then(r => r.json()).then(list => {
-      setPolaires(list);
-      if (list.length > 0) setPolaire(list[0]);
-    }).catch(() => {});
+    fetch(`${API}/polaires`).then(r => r.json()).then(setPolaires).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -272,11 +270,14 @@ export default function App() {
     if (!depPoint || !arrPoint || !polaire) return;
     if (windMode === 'grib' && !file) return;
     setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0);
+    setRouteDepAbsH(currentTimeH);
     try {
       const body = {
         polaire_file: polaire,
         p_dep: depPoint, p_arr: arrPoint,
-        t: windMode === 'grib' ? (meta?.times?.[depTimeIdx] ?? 0) : 0,
+        t: windMode === 'grib'
+          ? (meta?.times?.[depTimeIdx] ?? 0)
+          : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
         polar_pct: polarPct,
         ...(windMode === 'uniform'
@@ -366,34 +367,39 @@ export default function App() {
   const boatPosition = useMemo(() => {
     const tl = routeResult?.time_list;
     const rt = routeResult?.route;
-    if (!tl || !rt || tl.length < 2) return null;
-    if (currentTimeH <= tl[0]) return rt[0];
-    if (currentTimeH >= tl[tl.length - 1]) return null;
-    for (let i = 0; i < tl.length - 1; i++) {
-      if (currentTimeH >= tl[i] && currentTimeH < tl[i + 1]) {
-        const f = (currentTimeH - tl[i]) / (tl[i + 1] - tl[i]);
+    if (!tl || !rt || tl.length < 2 || routeDepAbsH === null) return null;
+    // Convertir times relatifs en absolus : base = routeDepAbsH − tl[0]
+    const base = routeDepAbsH - tl[0];
+    const tlAbs = tl.map(t => base + t);
+    if (currentTimeH <= tlAbs[0]) return rt[0];
+    if (currentTimeH >= tlAbs[tlAbs.length - 1]) return null;
+    for (let i = 0; i < tlAbs.length - 1; i++) {
+      if (currentTimeH >= tlAbs[i] && currentTimeH < tlAbs[i + 1]) {
+        const f = (currentTimeH - tlAbs[i]) / (tlAbs[i + 1] - tlAbs[i]);
         return [rt[i][0] + f * (rt[i + 1][0] - rt[i][0]),
                 rt[i][1] + f * (rt[i + 1][1] - rt[i][1])];
       }
     }
     return null;
-  }, [routeResult, currentTimeH]);
+  }, [routeResult, currentTimeH, routeDepAbsH]);
 
   // ── Infos bateau à l'instant courant ──────────────────────────────────
   const boatInfo = useMemo(() => {
     const tl = routeResult?.time_list;
     const rt = routeResult?.route;
-    if (!tl || !rt || tl.length < 2 || !boatPosition) return null;
+    if (!tl || !rt || tl.length < 2 || !boatPosition || routeDepAbsH === null) return null;
+    const base = routeDepAbsH - tl[0];
+    const tlAbs = tl.map(t => base + t);
 
     let i = 0;
-    for (; i < tl.length - 1; i++) {
-      if (currentTimeH >= tl[i] && currentTimeH < tl[i + 1]) break;
+    for (; i < tlAbs.length - 1; i++) {
+      if (currentTimeH >= tlAbs[i] && currentTimeH < tlAbs[i + 1]) break;
     }
-    if (i >= tl.length - 1) return null;
+    if (i >= tlAbs.length - 1) return null;
 
     const [lon1, lat1] = rt[i];
     const [lon2, lat2] = rt[i + 1];
-    const dt = tl[i + 1] - tl[i];
+    const dt = tlAbs[i + 1] - tlAbs[i];
 
     // Cap (Nord = 0°, Est = 90°)
     const midLatRad = ((lat1 + lat2) / 2) * Math.PI / 180;
@@ -425,7 +431,7 @@ export default function App() {
       : null;
 
     return { speed, windSpeed, angVent };
-  }, [routeResult, boatPosition, currentTimeH, windMode, uniformWind, windData]);
+  }, [routeResult, boatPosition, currentTimeH, windMode, uniformWind, windData, routeDepAbsH]);
 
   // ── Computed ──────────────────────────────────────────────────────────
   // currentTimeH est en heures absolues depuis l'époque Unix
@@ -664,6 +670,7 @@ export default function App() {
           <label style={labelStyle}>Fichier polaire</label>
           <select value={polaire} onChange={e => setPolaire(e.target.value)}
             style={{ ...inputStyle, marginBottom: 12 }}>
+            <option value="">— Choisir la polaire —</option>
             {polaires.map(p => <option key={p} value={p}>{p.replace('.csv', '')}</option>)}
           </select>
           <label style={labelStyle}>
@@ -701,22 +708,31 @@ export default function App() {
             onToggle={() => toggleClick('arr')}
           />
 
-          {/* Date de départ (GRIB uniquement) */}
-          {windMode === 'grib' && (
-            <>
-              <label style={labelStyle}>Date de départ</label>
-              <select
-                value={depTimeIdx}
-                onChange={e => setDepTimeIdx(+e.target.value)}
-                style={{ ...inputStyle, marginBottom: 10 }}
-                disabled={!meta}
-              >
-                {meta?.valid_times?.map((vt, i) => (
-                  <option key={i} value={i}>{fmtDatetime(vt)}</option>
-                )) ?? <option>— choisir un fichier GRIB —</option>}
-              </select>
-            </>
-          )}
+          {/* Date de départ */}
+          {(() => {
+            const useCurrentGrib = windMode === 'uniform' && currentMode === 'grib';
+            const depMeta   = useCurrentGrib ? currentMeta : meta;
+            const depRefH   = useCurrentGrib ? curRefH : windRefH;
+            return (
+              <>
+                <label style={labelStyle}>Date de départ</label>
+                <select
+                  value={depTimeIdx}
+                  onChange={e => {
+                    const idx = +e.target.value;
+                    setDepTimeIdx(idx);
+                    if (depRefH !== null && depMeta) setCurrentTimeH(depRefH + (depMeta.times[idx] ?? 0));
+                  }}
+                  style={{ ...inputStyle, marginBottom: 10 }}
+                  disabled={!depMeta}
+                >
+                  {depMeta?.valid_times?.map((vt, i) => (
+                    <option key={i} value={i}>{fmtDatetime(vt)}</option>
+                  )) ?? <option>— Choisir date de départ —</option>}
+                </select>
+              </>
+            );
+          })()}
 
           {/* Paramètres avancés */}
           <button onClick={() => setAdvOpen(v => !v)}
