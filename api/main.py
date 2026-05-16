@@ -18,7 +18,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
 from shapely import contains_xy
-from inputs.polaires import polaire as load_polaire   # noqa: E402
+from inputs.polaires import polaire as load_polaire, polaire_uniforme   # noqa: E402
 from core.isochrone import routage                    # noqa: E402
 from inputs.courants import (  # noqa: E402
     table as current_table,
@@ -322,7 +322,8 @@ class WindUniform(BaseModel):
 
 class RoutingRequest(BaseModel):
     grib_file:          Optional[str] = None
-    polaire_file:       str
+    polaire_file:       Optional[str] = None
+    motor_speed:        Optional[float] = None
     p_dep:   List[float]   # [lat, lon] en degrés -180/180
     p_arr:   List[float]
     t:       float = 0.0   # heure de départ (offset GRIB)
@@ -334,6 +335,17 @@ class RoutingRequest(BaseModel):
     wind_uniform:    Optional[WindUniform] = None
     grib_courant_file: Optional[str] = None
     courant_uniform:   Optional[WindUniform] = None  # même structure direction/force
+
+
+def _build_polar(req: "RoutingRequest"):
+    if req.motor_speed is not None:
+        return polaire_uniforme(req.motor_speed)
+    if req.polaire_file:
+        pol_path = POLAIRE_DIR / req.polaire_file
+        if not pol_path.exists():
+            raise HTTPException(404, "Polaire introuvable")
+        return _scale_polar(_get_P(str(pol_path)), req.polar_pct)
+    raise HTTPException(400, "polaire_file ou motor_speed requis")
 
 
 def _build_courant(req: "RoutingRequest"):
@@ -396,10 +408,6 @@ def _build_isochrones(L, grib_file=None):
 
 @app.post("/routing")
 def run_routing(req: RoutingRequest):
-    pol_path = POLAIRE_DIR / req.polaire_file
-    if not pol_path.exists():
-        raise HTTPException(404, "Polaire introuvable")
-
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
     else:
@@ -409,7 +417,7 @@ def run_routing(req: RoutingRequest):
         if not grib_path.exists():
             raise HTTPException(404, "GRIB introuvable")
         V = _get_V(str(grib_path))
-    P = _scale_polar(_get_P(str(pol_path)), req.polar_pct)
+    P = _build_polar(req)
 
     p_dep = [req.p_dep[0], req.p_dep[1]]
     p_arr = [req.p_arr[0], req.p_arr[1]]
@@ -455,10 +463,6 @@ def run_routing(req: RoutingRequest):
 
 @app.post("/routing/stream")
 def run_routing_stream(req: RoutingRequest):
-    pol_path = POLAIRE_DIR / req.polaire_file
-    if not pol_path.exists():
-        raise HTTPException(404, "Polaire introuvable")
-
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
     else:
@@ -468,7 +472,7 @@ def run_routing_stream(req: RoutingRequest):
         if not grib_path.exists():
             raise HTTPException(404, "GRIB introuvable")
         V = _get_V(str(grib_path))
-    P = _scale_polar(_get_P(str(pol_path)), req.polar_pct)
+    P = _build_polar(req)
 
     p_dep = [req.p_dep[0], req.p_dep[1]]
     p_arr = [req.p_arr[0], req.p_arr[1]]

@@ -109,6 +109,20 @@ def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, C=None):
 	L = nuage_iso(I, t, dt, n, V, P, C=C)
 	return env.enveloppe(L, r, p_dep, p_arr, ang, r)
 
+def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, C=None):
+	I0 = np.array([p_dep], dtype=float)
+	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
+	I = iso_point(p_dep, t, dt, n, V, P, C=C)
+	L = [I0, I]
+	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
+	for _ in range(N - 1):
+		t += dt
+		ang -= dang
+		I = iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, C=C)
+		L.append(I)
+		print(f"nombre isochrones : {len(L) - 1}, temps écoulé : {t + dt:.2f} heures, nombre de points : {len(I)}")
+	return np.vstack(L)
+
 def iso_est_arrive(I, p_arr, e_arr):
 	distances = f.distance_np(I, p_arr)
 	mask = distances <= e_arr

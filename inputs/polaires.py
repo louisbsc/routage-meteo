@@ -49,6 +49,17 @@ def P2(ang, f):
     # f peut être un scalaire ou un array broadcastable
     return P2aux_vec(ang) * 2 * (1 - np.exp(-f / 10))
 
+def polaire_uniforme(c):
+    def P(ang, f):
+        ang_arr = np.asarray(ang)
+        f_arr = np.asarray(f)
+        shape = np.broadcast(ang_arr, f_arr).shape
+        out = np.full(shape, float(c))
+        out[np.broadcast_to(f_arr, shape) == 0] = 0.0
+        return out
+    P.v_max = float(c)
+    return P
+
 # POLAIRES RÉELLES
 
 import pandas as pd

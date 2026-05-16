@@ -205,7 +205,7 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta):
 
     p2 = voisins1[idx]
 
-    max_points = 10000   # borne large mais sûre
+    max_points = 100000   # borne large mais sûre
     l = np.empty((max_points, N.shape[1]))
     l[0] = p
     l[1] = p1

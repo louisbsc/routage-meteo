@@ -114,6 +114,8 @@ export default function App() {
   const [uniformCurrentData, setUniformCurrentData]     = useState([]);
 
   // Routing
+  const [propulsionMode, setPropulsionMode] = useState('voile'); // 'voile' | 'moteur'
+  const [motorSpeed, setMotorSpeed]         = useState(7);
   const [polaires, setPolaires]     = useState([]);
   const [polaire, setPolaire]       = useState('');
   const [depPoint, setDepPoint]     = useState(null);  // [lat, lon]
@@ -237,7 +239,22 @@ export default function App() {
 
   // ── Pré-sélection dt ──────────────────────────────────────────────────
   useEffect(() => {
-    if (!depPoint || !arrPoint || !polaire) return;
+    if (!depPoint || !arrPoint) return;
+    if (propulsionMode === 'moteur') {
+      const [lat1, lon1] = depPoint;
+      const [lat2, lon2] = arrPoint;
+      const R = 3440.065;
+      const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+      const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      const dt_raw = dist_nm / (50 * motorSpeed);
+      const dt = Math.min(6, Math.max(0.25, Math.round(dt_raw / 0.25) * 0.25));
+      setParams(p => ({ ...p, dt }));
+      return;
+    }
+    if (!polaire) return;
     const [lat1, lon1] = depPoint;
     const [lat2, lon2] = arrPoint;
     const R = 3440.065; // rayon terrestre en milles nautiques
@@ -255,7 +272,7 @@ export default function App() {
         setParams(p => ({ ...p, dt }));
       })
       .catch(() => {});
-  }, [depPoint, arrPoint, polaire]);
+  }, [depPoint, arrPoint, polaire, propulsionMode, motorSpeed]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const handleMapClick = useCallback(([lat, lon]) => {
@@ -267,19 +284,26 @@ export default function App() {
     setClickMode(m => m === mode ? null : mode);
 
   const runRouting = async () => {
-    if (!depPoint || !arrPoint || !polaire) return;
+    if (!depPoint || !arrPoint) return;
+    if (propulsionMode === 'voile' && !polaire) return;
     if (windMode === 'grib' && !file) return;
     setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0);
-    setRouteDepAbsH(currentTimeH);
+    const depAbsH = windMode === 'grib' && windRefH !== null
+      ? windRefH + (meta?.times?.[depTimeIdx] ?? 0)
+      : currentMode === 'grib' && curRefH !== null
+        ? curRefH + (currentMeta?.times?.[depTimeIdx] ?? 0)
+        : currentTimeH;
+    setRouteDepAbsH(depAbsH);
     try {
       const body = {
-        polaire_file: polaire,
+        ...(propulsionMode === 'voile'
+          ? { polaire_file: polaire, polar_pct: polarPct }
+          : { motor_speed: motorSpeed }),
         p_dep: depPoint, p_arr: arrPoint,
         t: windMode === 'grib'
           ? (meta?.times?.[depTimeIdx] ?? 0)
           : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
-        polar_pct: polarPct,
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
@@ -444,7 +468,8 @@ export default function App() {
   const timeOffset = meta
     ? `T+${windT.toFixed(1)}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
     : '';
-  const canRoute   = (windMode === 'uniform' || !!file) && !!depPoint && !!arrPoint && !!polaire && !routing;
+  const canRoute   = (windMode === 'uniform' || !!file) && !!depPoint && !!arrPoint &&
+    (propulsionMode === 'moteur' || !!polaire) && !routing;
 
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#080d1a', fontFamily: FONT }}>
@@ -506,7 +531,7 @@ export default function App() {
             <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
               <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
-                style={{ accentColor: '#4fc3f7', cursor: 'pointer' }} />
+                style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
               Afficher
             </label>
           </div>
@@ -518,9 +543,9 @@ export default function App() {
                 style={{
                   flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
                   fontFamily: FONT, cursor: 'pointer',
-                  background: windMode === mode ? '#4fc3f7' : 'rgba(30,40,80,0.8)',
+                  background: windMode === mode ? '#60a5fa' : 'rgba(30,40,80,0.8)',
                   color: windMode === mode ? '#080d1a' : '#c8d8ff',
-                  border: `1px solid ${windMode === mode ? '#4fc3f7' : 'rgba(100,160,255,0.2)'}`,
+                  border: `1px solid ${windMode === mode ? '#60a5fa' : 'rgba(100,160,255,0.2)'}`,
                   transition: 'all 0.15s',
                 }}>
                 {mode === 'grib' ? 'GRIB' : 'Uniforme'}
@@ -540,20 +565,20 @@ export default function App() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px' }}>
                   <div>
                     <label style={labelStyle}>
-                      Densité <strong style={{ color: '#4fc3f7' }}>1/{stride}</strong>
+                      Densité <strong style={{ color: '#60a5fa' }}>1/{stride}</strong>
                       <span style={{ opacity: 0.35, marginLeft: 6 }}>({windData.length.toLocaleString()})</span>
                     </label>
                     <input type="range" min={1} max={6} value={stride}
                       onChange={e => setStride(+e.target.value)}
-                      style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+                      style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
                   </div>
                   <div>
                     <label style={labelStyle}>
-                      Pas <strong style={{ color: '#4fc3f7' }}>{STEP_OPTIONS[stepIdx].label}</strong>
+                      Pas <strong style={{ color: '#60a5fa' }}>{STEP_OPTIONS[stepIdx].label}</strong>
                     </label>
                     <input type="range" min={0} max={STEP_OPTIONS.length - 1} value={stepIdx}
                       onChange={e => { setStepIdx(+e.target.value); setCurrentTimeH(meta.times[0] ?? 0); }}
-                      style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+                      style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
                   </div>
                 </div>
               )}
@@ -576,12 +601,12 @@ export default function App() {
                 </label>
               </div>
               <label style={labelStyle}>
-                Densité <strong style={{ color: '#4fc3f7' }}>{['très sparse', 'sparse', 'normale', 'dense', 'très dense'][uniformStride - 1]}</strong>
+                Densité <strong style={{ color: '#60a5fa' }}>{['très sparse', 'sparse', 'normale', 'dense', 'très dense'][uniformStride - 1]}</strong>
                 <span style={{ opacity: 0.35, marginLeft: 6 }}>({uniformWindData.length} pts)</span>
               </label>
               <input type="range" min={1} max={5} value={uniformStride}
                 onChange={e => setUniformStride(+e.target.value)}
-                style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+                style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
             </>
           )}
         </div>
@@ -666,22 +691,54 @@ export default function App() {
         <div style={card}>
           <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase', marginBottom: 12 }}>
             Polaire
+</div>
+
+          {/* Toggle Voile / Moteur */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+            {['voile', 'moteur'].map(mode => (
+              <button key={mode} onClick={() => setPropulsionMode(mode)}
+                style={{
+                  flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
+                  fontFamily: FONT, cursor: 'pointer',
+                  background: propulsionMode === mode ? '#60a5fa' : 'rgba(30,40,80,0.8)',
+                  color: propulsionMode === mode ? '#080d1a' : '#c8d8ff',
+                  border: `1px solid ${propulsionMode === mode ? '#60a5fa' : 'rgba(100,160,255,0.2)'}`,
+                  transition: 'all 0.15s',
+                }}>
+                {mode === 'voile' ? 'Voile' : 'Moteur'}
+              </button>
+            ))}
           </div>
-          <label style={labelStyle}>Fichier polaire</label>
-          <select value={polaire} onChange={e => setPolaire(e.target.value)}
-            style={{ ...inputStyle, marginBottom: 12 }}>
-            <option value="">— Choisir la polaire —</option>
-            {polaires.map(p => <option key={p} value={p}>{p.replace('.csv', '')}</option>)}
-          </select>
-          <label style={labelStyle}>
-            Performance polaire&nbsp;
-            <strong style={{ color: polarPct < 100 ? '#ff8080' : polarPct > 100 ? '#3ddc84' : '#4fc3f7' }}>
-              {polarPct}%
-            </strong>
-          </label>
-          <input type="range" min={50} max={150} step={5} value={polarPct}
-            onChange={e => setPolarPct(+e.target.value)}
-            style={{ width: '100%', accentColor: '#4fc3f7', cursor: 'pointer' }} />
+
+          {propulsionMode === 'voile' ? (
+            <>
+              <label style={labelStyle}>Fichier polaire</label>
+              <select value={polaire} onChange={e => setPolaire(e.target.value)}
+                style={{ ...inputStyle, marginBottom: 12 }}>
+                <option value="">— Choisir la polaire —</option>
+                {polaires.map(p => <option key={p} value={p}>{p.replace('.csv', '')}</option>)}
+              </select>
+              <label style={labelStyle}>
+                Performance polaire&nbsp;
+                <strong style={{ color: polarPct < 100 ? '#ff8080' : polarPct > 100 ? '#3ddc84' : '#60a5fa' }}>
+                  {polarPct}%
+                </strong>
+              </label>
+              <input type="range" min={50} max={150} step={5} value={polarPct}
+                onChange={e => setPolarPct(+e.target.value)}
+                style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
+            </>
+          ) : (
+            <>
+              <label style={labelStyle}>
+                Vitesse moteur&nbsp;
+                <strong style={{ color: '#60a5fa' }}>{motorSpeed} kt</strong>
+              </label>
+              <input type="range" min={1} max={30} step={0.5} value={motorSpeed}
+                onChange={e => setMotorSpeed(+e.target.value)}
+                style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
+            </>
+          )}
         </div>
 
         {/* ── Carte routage ────────────────────────────────────────── */}
