@@ -26,6 +26,32 @@ function fmtCoord(pt) {
 
 const FONT = "'SF Mono', 'Consolas', monospace";
 
+function computeBoatPosition(routeResult, routeDepAbsH, currentTimeH) {
+  const tl = routeResult?.time_list;
+  const rt = routeResult?.route;
+  if (!tl || !rt || tl.length < 2 || routeDepAbsH === null) return null;
+  const base = routeDepAbsH - tl[0];
+  const tlAbs = tl.map(t => base + t);
+  if (currentTimeH <= tlAbs[0]) return rt[0];
+  if (currentTimeH >= tlAbs[tlAbs.length - 1]) return null;
+  for (let i = 0; i < tlAbs.length - 1; i++) {
+    if (currentTimeH >= tlAbs[i] && currentTimeH < tlAbs[i + 1]) {
+      const f = (currentTimeH - tlAbs[i]) / (tlAbs[i + 1] - tlAbs[i]);
+      return [rt[i][0] + f * (rt[i + 1][0] - rt[i][0]),
+              rt[i][1] + f * (rt[i + 1][1] - rt[i][1])];
+    }
+  }
+  return null;
+}
+
+const SAVED_ROUTE_COLORS = [
+  [79,  195, 247, 230],
+  [255, 183,  77, 230],
+  [174, 213, 129, 230],
+  [186, 104, 200, 230],
+  [255, 112,  67, 230],
+];
+
 const STEP_OPTIONS = [
   { label: '1min',  h: 1 / 60 },
   { label: '10min', h: 10 / 60 },
@@ -128,11 +154,17 @@ export default function App() {
   const [routingProgress, setRoutingProgress] = useState(0);
   const [depTimeIdx, setDepTimeIdx] = useState(0);    // index dans meta.times
   const [showIsochrones, setShowIsochrones] = useState(true);
+  const [showCurrentRoute, setShowCurrentRoute] = useState(true);
   const [advOpen, setAdvOpen]       = useState(false);
   const [params, setParams]         = useState({
     dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3,
   });
   const [polarPct, setPolarPct]     = useState(100);
+
+  // Saved routes
+  const [savedRoutes, setSavedRoutes] = useState([]);
+  const [routeCounter, setRouteCounter] = useState(1);
+  const [activeRouteIds, setActiveRouteIds] = useState(new Set());
 
   // ── Init ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -275,6 +307,40 @@ export default function App() {
   }, [depPoint, arrPoint, polaire, propulsionMode, motorSpeed]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
+  const saveRoute = () => {
+    if (!routeResult) return;
+    const id = Date.now();
+    setSavedRoutes(r => [...r, {
+      id,
+      name: `Route ${routeCounter}`,
+      routeResult,
+      depPoint,
+      arrPoint,
+      routeDepAbsH,
+      color: SAVED_ROUTE_COLORS[savedRoutes.length % SAVED_ROUTE_COLORS.length],
+    }]);
+    setRouteCounter(c => c + 1);
+    setActiveRouteIds(prev => new Set([...prev, id]));
+    setShowCurrentRoute(false);
+  };
+
+  const toggleSavedRoute = (id) => {
+    setActiveRouteIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const deleteSavedRoute = (id) => {
+    setSavedRoutes(r => r.filter(s => s.id !== id));
+    setActiveRouteIds(prev => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
   const handleMapClick = useCallback(([lat, lon]) => {
     if (clickMode === 'dep') { setDepPoint([lat, lon]); setClickMode(null); }
     if (clickMode === 'arr') { setArrPoint([lat, lon]); setClickMode(null); }
@@ -287,7 +353,7 @@ export default function App() {
     if (!depPoint || !arrPoint) return;
     if (propulsionMode === 'voile' && !polaire) return;
     if (windMode === 'grib' && !file) return;
-    setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0);
+    setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0); setShowCurrentRoute(true);
     const depAbsH = windMode === 'grib' && windRefH !== null
       ? windRefH + (meta?.times?.[depTimeIdx] ?? 0)
       : currentMode === 'grib' && curRefH !== null
@@ -387,25 +453,11 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentMode, viewState, uniformCurrent, uniformCurrentStride]);
 
-  // ── Position du bateau sur la route ───────────────────────────────────
+  // ── Position du bateau sur la route courante (pour le HUD) ───────────
   const boatPosition = useMemo(() => {
-    const tl = routeResult?.time_list;
-    const rt = routeResult?.route;
-    if (!tl || !rt || tl.length < 2 || routeDepAbsH === null) return null;
-    // Convertir times relatifs en absolus : base = routeDepAbsH − tl[0]
-    const base = routeDepAbsH - tl[0];
-    const tlAbs = tl.map(t => base + t);
-    if (currentTimeH <= tlAbs[0]) return rt[0];
-    if (currentTimeH >= tlAbs[tlAbs.length - 1]) return null;
-    for (let i = 0; i < tlAbs.length - 1; i++) {
-      if (currentTimeH >= tlAbs[i] && currentTimeH < tlAbs[i + 1]) {
-        const f = (currentTimeH - tlAbs[i]) / (tlAbs[i + 1] - tlAbs[i]);
-        return [rt[i][0] + f * (rt[i + 1][0] - rt[i][0]),
-                rt[i][1] + f * (rt[i + 1][1] - rt[i][1])];
-      }
-    }
-    return null;
-  }, [routeResult, currentTimeH, routeDepAbsH]);
+    if (!showCurrentRoute) return null;
+    return computeBoatPosition(routeResult, routeDepAbsH, currentTimeH);
+  }, [showCurrentRoute, routeResult, routeDepAbsH, currentTimeH]);
 
   // ── Infos bateau à l'instant courant ──────────────────────────────────
   const boatInfo = useMemo(() => {
@@ -464,6 +516,24 @@ export default function App() {
     return fmtDatetime(new Date(currentTimeH * 3600000).toISOString());
   }, [meta, currentMeta, currentTimeH]);
 
+  const extraRoutes = useMemo(
+    () => savedRoutes.filter(s => activeRouteIds.has(s.id)),
+    [savedRoutes, activeRouteIds],
+  );
+
+  const boats = useMemo(() => {
+    const result = [];
+    if (showCurrentRoute && routeResult) {
+      const pos = computeBoatPosition(routeResult, routeDepAbsH, currentTimeH);
+      if (pos) result.push({ pos, color: [255, 255, 255, 255], outline: [80, 160, 255, 255] });
+    }
+    extraRoutes.forEach(saved => {
+      const pos = computeBoatPosition(saved.routeResult, saved.routeDepAbsH, currentTimeH);
+      if (pos) result.push({ pos, color: [...saved.color.slice(0, 3), 255], outline: [255, 255, 255, 200] });
+    });
+    return result;
+  }, [showCurrentRoute, routeResult, routeDepAbsH, extraRoutes, currentTimeH]);
+
   const windT = windRefH !== null ? (currentTimeH - windRefH) : 0;
   const timeOffset = meta
     ? `T+${windT.toFixed(1)}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
@@ -479,8 +549,8 @@ export default function App() {
         onViewStateChange={setViewState}
         depPoint={depPoint}
         arrPoint={arrPoint}
-        route={routeResult?.route ?? null}
-        boatPosition={boatPosition}
+        route={showCurrentRoute ? (routeResult?.route ?? null) : null}
+        boats={boats}
         isochrones={routeResult?.isochrones ?? []}
         showIsochrones={showIsochrones}
         showGrib={showGrib}
@@ -488,6 +558,7 @@ export default function App() {
         showCurrent={showCurrent}
         clickMode={clickMode}
         onMapClick={handleMapClick}
+        extraRoutes={extraRoutes}
       />
 
       {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
@@ -857,22 +928,34 @@ export default function App() {
 
           {/* Résultat */}
           {routeResult && !routing && (
-            <div style={{
-              background: 'rgba(20,85,164,0.2)', borderRadius: 8,
-              padding: '10px 12px', border: '1px solid rgba(100,160,255,0.2)',
-            }}>
-              <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4 }}>Durée estimée</div>
-              <div style={{ fontSize: 22, color: '#4fc3f7', fontWeight: 'bold' }}>
-                {routeResult.days > 0 && <>{routeResult.days}<span style={{ fontSize: 13, opacity: 0.7 }}>j </span></>}
-                {routeResult.hours}<span style={{ fontSize: 13, opacity: 0.7 }}>h</span>
-                {params.dt < 1 && routeResult.minutes > 0 && (
-                  <>{String(routeResult.minutes).padStart(2, '0')}<span style={{ fontSize: 13, opacity: 0.7 }}>min</span></>
-                )}
+            <>
+              <div style={{
+                background: 'rgba(20,85,164,0.2)', borderRadius: 8,
+                padding: '10px 12px', border: '1px solid rgba(100,160,255,0.2)',
+              }}>
+                <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4 }}>Durée estimée</div>
+                <div style={{ fontSize: 22, color: '#4fc3f7', fontWeight: 'bold' }}>
+                  {routeResult.days > 0 && <>{routeResult.days}<span style={{ fontSize: 13, opacity: 0.7 }}>j </span></>}
+                  {routeResult.hours}<span style={{ fontSize: 13, opacity: 0.7 }}>h</span>
+                  {params.dt < 1 && routeResult.minutes > 0 && (
+                    <>{String(routeResult.minutes).padStart(2, '0')}<span style={{ fontSize: 13, opacity: 0.7 }}>min</span></>
+                  )}
+                </div>
+                <div style={{ fontSize: 10, opacity: 0.4, marginTop: 6 }}>
+                  Calcul : {routeResult.calc_time_s}s
+                </div>
               </div>
-              <div style={{ fontSize: 10, opacity: 0.4, marginTop: 6 }}>
-                Calcul : {routeResult.calc_time_s}s
-              </div>
-            </div>
+              <button onClick={saveRoute} style={{
+                width: '100%', padding: '7px 0', borderRadius: 7, marginTop: 8,
+                fontSize: 12, fontFamily: FONT, cursor: 'pointer',
+                background: 'rgba(61,220,132,0.12)',
+                color: '#3ddc84',
+                border: '1px solid rgba(61,220,132,0.35)',
+                transition: 'all 0.15s',
+              }}>
+                Sauvegarder la route
+              </button>
+            </>
           )}
 
           {routeError && (
@@ -985,12 +1068,89 @@ export default function App() {
         );
       })()}
 
+      {/* ══ Panneau routes sauvegardées (droite) ══════════════════════════ */}
+      {savedRoutes.length > 0 && (
+        <div style={{
+          position: 'absolute', top: 0, right: 16, zIndex: 10,
+          width: 260,
+          maxHeight: `calc(100vh - 16px - ${(meta || currentMeta) ? 56 : 0}px)`,
+          overflowY: 'auto', scrollbarWidth: 'none',
+        }}>
+          <div style={{ ...card, minWidth: 0 }}>
+            <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase', marginBottom: 12 }}>
+              Routes sauvegardées
+            </div>
+            {savedRoutes.map((saved, idx) => {
+              const active = activeRouteIds.has(saved.id);
+              const [r, g, b] = saved.color;
+              const accent = `rgb(${r},${g},${b})`;
+              return (
+                <div key={saved.id} style={{
+                  background: active ? `rgba(${r},${g},${b},0.07)` : 'rgba(20,30,60,0.6)',
+                  borderRadius: 8,
+                  padding: '9px 10px',
+                  marginBottom: idx < savedRoutes.length - 1 ? 8 : 0,
+                  border: `1px solid ${active ? `rgba(${r},${g},${b},0.55)` : 'rgba(100,160,255,0.15)'}`,
+                  transition: 'border 0.2s, background 0.2s',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+                    <div style={{
+                      width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                      background: accent, opacity: active ? 1 : 0.35,
+                      transition: 'opacity 0.2s',
+                    }} />
+                    <div style={{ fontSize: 12, color: active ? accent : '#7ec8f7', fontWeight: 'bold' }}>
+                      {saved.name}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10, opacity: 0.55, marginBottom: 1 }}>
+                    Dép. {fmtCoord(saved.depPoint)}
+                  </div>
+                  <div style={{ fontSize: 10, opacity: 0.55, marginBottom: 6 }}>
+                    Arr. {fmtCoord(saved.arrPoint)}
+                  </div>
+                  <div style={{ fontSize: 13, color: '#c8d8ff', fontWeight: 'bold', marginBottom: 8, fontVariantNumeric: 'tabular-nums' }}>
+                    {saved.routeResult.days > 0 && (
+                      <>{saved.routeResult.days}<span style={{ fontSize: 10, opacity: 0.6 }}>j </span></>
+                    )}
+                    {saved.routeResult.hours}<span style={{ fontSize: 10, opacity: 0.6 }}>h</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => toggleSavedRoute(saved.id)} style={{
+                      flex: 1, padding: '5px 0', borderRadius: 5, fontSize: 10,
+                      fontFamily: FONT, cursor: 'pointer',
+                      background: active ? `rgba(${r},${g},${b},0.25)` : 'rgba(20,85,164,0.45)',
+                      color: active ? accent : '#7ec8f7',
+                      border: `1px solid ${active ? `rgba(${r},${g},${b},0.5)` : 'rgba(100,160,255,0.3)'}`,
+                      transition: 'all 0.15s',
+                    }}>
+                      {active ? 'Masquer' : 'Afficher'}
+                    </button>
+                    <button onClick={() => deleteSavedRoute(saved.id)} style={{
+                      flex: 1, padding: '5px 0', borderRadius: 5, fontSize: 10,
+                      fontFamily: FONT, cursor: 'pointer',
+                      background: 'rgba(180,30,30,0.25)',
+                      color: '#ff8080',
+                      border: '1px solid rgba(255,100,100,0.3)',
+                      transition: 'all 0.15s',
+                    }}>
+                      Supprimer
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div style={{
         position: 'absolute',
         bottom: (meta || currentMeta) ? 72 : 16,
-        right: 16, zIndex: 10,
+        right: 16, zIndex: savedRoutes.length > 0 ? 0 : 10,
         background: 'rgba(8,13,30,0.7)', borderRadius: 8, padding: '6px 12px',
         color: 'rgba(150,170,220,0.55)', fontSize: 10, fontFamily: FONT,
+        display: savedRoutes.length > 0 ? 'none' : 'block',
       }}>
         Hover pour les valeurs
       </div>

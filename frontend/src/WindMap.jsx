@@ -71,10 +71,11 @@ const iconMapping = { arrow: { x: 0, y: 0, width: 32, height: 32, mask: true } }
 
 export default function WindMap({
   data, viewState, onViewStateChange,
-  depPoint, arrPoint, route, boatPosition,
+  depPoint, arrPoint, route, boats = [],
   isochrones, showIsochrones, showGrib,
   currentData, showCurrent,
   clickMode, onMapClick,
+  extraRoutes = [],
 }) {
   const layers = useMemo(() => {
     const result = [];
@@ -122,7 +123,24 @@ export default function WindMap({
       }));
     }
 
-    // ── Route ─────────────────────────────────────────────────────────────
+    // ── Routes sauvegardées actives ───────────────────────────────────────
+    extraRoutes.forEach(saved => {
+      if (saved.routeResult?.route?.length) {
+        result.push(new PathLayer({
+          id: `saved-route-${saved.id}`,
+          data: [{ path: saved.routeResult.route }],
+          getPath:  d => d.path,
+          getColor: saved.color,
+          getWidth: 3,
+          widthUnits: 'pixels',
+          widthMinPixels: 2,
+          jointRounded: true,
+          capRounded: true,
+        }));
+      }
+    });
+
+    // ── Route courante ────────────────────────────────────────────────────
     if (route?.length) {
       result.push(new PathLayer({
         id: 'route-path',
@@ -174,24 +192,25 @@ export default function WindMap({
       );
     }
 
-    // ── Position du bateau ────────────────────────────────────────────────
-    if (boatPosition) {
+    // ── Bateaux ───────────────────────────────────────────────────────────
+    if (boats.length) {
       result.push(new ScatterplotLayer({
-        id: 'boat',
-        data: [{ pos: boatPosition }],
+        id: 'boats',
+        data: boats,
         getPosition: d => d.pos,
         getRadius: 8,
         radiusUnits: 'pixels',
-        getFillColor: [255, 255, 255, 255],
+        getFillColor: d => d.color,
         stroked: true,
-        getLineColor: [80, 160, 255, 255],
+        getLineColor: d => d.outline,
         lineWidthMinPixels: 2.5,
         pickable: false,
+        updateTriggers: { getFillColor: boats, getLineColor: boats },
       }));
     }
 
     return result;
-  }, [data, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boatPosition]);
+  }, [data, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes]);
 
   return (
     <DeckGL
