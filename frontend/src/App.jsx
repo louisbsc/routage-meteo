@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import WindMap from './WindMap.jsx';
 
 const API = 'http://localhost:8000';
@@ -19,8 +19,13 @@ function fmtShort(ts_h) {
 
 function fmtCoord(pt) {
   if (!pt) return null;
-  const [lat, lon] = pt;
-  return `${Math.abs(lat).toFixed(2)}°${lat >= 0 ? 'N' : 'S'}  ${Math.abs(lon).toFixed(2)}°${lon >= 0 ? 'E' : 'W'}`;
+  const fmt = (dd, pos, neg) => {
+    const a = Math.abs(dd);
+    const deg = Math.floor(a);
+    const min = ((a % 1) * 60).toFixed(2);
+    return `${deg}°${min}'${dd >= 0 ? pos : neg}`;
+  };
+  return `${fmt(pt[0], 'N', 'S')} ${fmt(pt[1], 'E', 'W')}`;
 }
 
 
@@ -79,30 +84,98 @@ const inputStyle = {
 const labelStyle = { fontSize: 11, opacity: 0.65, marginBottom: 5, display: 'block' };
 
 // ── Petit composant point (départ/arrivée) ──────────────────────────────────
-function PointRow({ label, point, mode, activeMode, onToggle, accentColor }) {
+function PointRow({ label, point, mode, activeMode, onToggle, accentColor, onManualSet }) {
   const active = activeMode === mode;
+  const [latDeg, setLatDeg] = useState('');
+  const [latMin, setLatMin] = useState('');
+  const [latHem, setLatHem] = useState('N');
+  const [lonDeg, setLonDeg] = useState('');
+  const [lonMin, setLonMin] = useState('');
+  const [lonHem, setLonHem] = useState('E');
+  const anyFocused = useRef(false);
+
+  useEffect(() => {
+    if (anyFocused.current) return;
+    if (!point) {
+      setLatDeg(''); setLatMin(''); setLatHem('N');
+      setLonDeg(''); setLonMin(''); setLonHem('E');
+      return;
+    }
+    const aLat = Math.abs(point[0]), aLon = Math.abs(point[1]);
+    setLatDeg(String(Math.floor(aLat)));
+    setLatMin(((aLat % 1) * 60).toFixed(4));
+    setLatHem(point[0] >= 0 ? 'N' : 'S');
+    setLonDeg(String(Math.floor(aLon)));
+    setLonMin(((aLon % 1) * 60).toFixed(4));
+    setLonHem(point[1] >= 0 ? 'E' : 'W');
+  }, [point]);
+
+  const trySet = (ld, lm, lh, od, om, oh) => {
+    const ldN = parseInt(ld, 10);
+    const lmN = parseFloat(lm);
+    const odN = parseInt(od, 10);
+    const omN = parseFloat(om);
+    if ([ldN, lmN, odN, omN].some(isNaN)) return;
+    if (ldN < 0 || ldN > 90  || lmN < 0 || lmN >= 60) return;
+    if (odN < 0 || odN > 180 || omN < 0 || omN >= 60) return;
+    onManualSet([(ldN + lmN / 60) * (lh === 'N' ? 1 : -1),
+                 (odN + omN / 60) * (oh === 'E' ? 1 : -1)]);
+  };
+
+  const fo = {
+    onFocus: () => { anyFocused.current = true; },
+    onBlur:  () => { anyFocused.current = false; },
+  };
+  const is = { ...inputStyle, padding: '4px 6px', fontSize: 12, color: point ? accentColor : 'rgba(200,216,255,0.5)' };
+  const hemStyle = { padding: '3px 7px', borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: FONT, background: 'rgba(30,40,80,0.8)', color: accentColor, border: `1px solid rgba(100,160,255,0.2)` };
+
   return (
     <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
         <span style={{ fontSize: 11, opacity: 0.65 }}>{label}</span>
-        <button
-          onClick={onToggle}
-          style={{
-            fontSize: 10, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
-            background: active ? accentColor : 'rgba(30,40,80,0.8)',
-            color: active ? '#080d1a' : '#c8d8ff',
-            border: `1px solid ${active ? accentColor : 'rgba(100,160,255,0.2)'}`,
-            fontFamily: FONT, transition: 'all 0.15s',
-          }}
-        >
-          {active ? '⊕ cliquer sur la carte…' : 'Pointer'}
+        <button onClick={onToggle} style={{
+          fontSize: 10, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
+          background: active ? accentColor : 'rgba(30,40,80,0.8)',
+          color: active ? '#080d1a' : '#c8d8ff',
+          border: `1px solid ${active ? accentColor : 'rgba(100,160,255,0.2)'}`,
+          fontFamily: FONT, transition: 'all 0.15s',
+        }}>
+          {active ? '⊕ cliquer…' : 'Pointer'}
         </button>
       </div>
-      <div style={{
-        fontSize: 12, fontVariantNumeric: 'tabular-nums', letterSpacing: '0.03em',
-        color: point ? accentColor : 'rgba(200,216,255,0.25)',
-      }}>
-        {fmtCoord(point) ?? '—'}
+      {/* Lat */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginBottom: 4 }}>
+        <span style={{ fontSize: 10, opacity: 0.45, width: 20 }}>Lat</span>
+        <input type="number" min={0} max={90}     step={1}      value={latDeg} placeholder="—"
+          {...fo} style={{ ...is, width: 44 }}
+          onChange={e => { setLatDeg(e.target.value); trySet(e.target.value, latMin, latHem, lonDeg, lonMin, lonHem); }} />
+        <span style={{ fontSize: 11, opacity: 0.35 }}>°</span>
+        <input type="number" min={0} max={59.9999} step={0.0001} value={latMin} placeholder="—"
+          {...fo} style={{ ...is, flex: 1 }}
+          onChange={e => { setLatMin(e.target.value); trySet(latDeg, e.target.value, latHem, lonDeg, lonMin, lonHem); }} />
+        <span style={{ fontSize: 11, opacity: 0.35 }}>'</span>
+        <button style={hemStyle} onClick={() => {
+          const h = latHem === 'N' ? 'S' : 'N';
+          setLatHem(h);
+          trySet(latDeg, latMin, h, lonDeg, lonMin, lonHem);
+        }}>{latHem}</button>
+      </div>
+      {/* Lon */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+        <span style={{ fontSize: 10, opacity: 0.45, width: 20 }}>Lon</span>
+        <input type="number" min={0} max={180}    step={1}      value={lonDeg} placeholder="—"
+          {...fo} style={{ ...is, width: 44 }}
+          onChange={e => { setLonDeg(e.target.value); trySet(latDeg, latMin, latHem, e.target.value, lonMin, lonHem); }} />
+        <span style={{ fontSize: 11, opacity: 0.35 }}>°</span>
+        <input type="number" min={0} max={59.9999} step={0.0001} value={lonMin} placeholder="—"
+          {...fo} style={{ ...is, flex: 1 }}
+          onChange={e => { setLonMin(e.target.value); trySet(latDeg, latMin, latHem, lonDeg, e.target.value, lonHem); }} />
+        <span style={{ fontSize: 11, opacity: 0.35 }}>'</span>
+        <button style={hemStyle} onClick={() => {
+          const h = lonHem === 'E' ? 'W' : 'E';
+          setLonHem(h);
+          trySet(latDeg, latMin, latHem, lonDeg, lonMin, h);
+        }}>{lonHem}</button>
       </div>
     </div>
   );
@@ -829,11 +902,13 @@ export default function App() {
             label="Départ" mode="dep" activeMode={clickMode}
             point={depPoint} accentColor="#3ddc84"
             onToggle={() => toggleClick('dep')}
+            onManualSet={setDepPoint}
           />
           <PointRow
             label="Arrivée" mode="arr" activeMode={clickMode}
             point={arrPoint} accentColor="#ff6b6b"
             onToggle={() => toggleClick('arr')}
+            onManualSet={setArrPoint}
           />
 
           {/* Date de départ */}
