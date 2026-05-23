@@ -182,4 +182,3 @@ def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, C=None, progress_cb=None):
 
 	return latitude, longitude, time_list, L
 
-	

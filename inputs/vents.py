@@ -169,6 +169,32 @@ def vent_grib_deg(path):
 
 
 
+def vent_filtre_route(V, route, seuil):
+    """
+    Enveloppe une fonction vent V(p, t) en mettant direction et force à zéro
+    pour tout point dont la distance à la polyligne route dépasse seuil.
+
+    V      : fonction vent — même signature que vent_grib_nm / vent_grib_deg
+    route  : (K, ≥2) waypoints dans le même système de coordonnées que p
+    seuil  : float  (même unité que les coordonnées de V)
+    """
+    from core.utils import point_proche_route
+    route_ = np.asarray(route, dtype=float)
+
+    def vent(p, t):
+        p_arr  = np.asarray(p)
+        batch  = p_arr.ndim == 2
+        pts    = p_arr if batch else p_arr[np.newaxis, :]    # (M, ≥2)
+        result = np.array(V(p, t), dtype=float)
+        if not batch:
+            result = result[np.newaxis, :]                   # (1, 2)
+        mask           = point_proche_route(route_, pts, seuil)  # (M,) bool
+        result[~mask]  = 0.0
+        return result if batch else result[0]
+
+    return vent
+
+
 # AFFICHAGE
 
 def aff_vent_static(V, t, intx, inty, n):

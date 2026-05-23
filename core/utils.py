@@ -62,5 +62,37 @@ def angle_oriente_negatif(a, b, c):
 
     return ang
 
+def point_proche_route(route, P, seuil):
+    """
+    Retourne True/tableau de bool selon que la distance de P à la polyligne
+    route est inférieure à seuil.
 
+    route : (K, ≥2) — séquence de waypoints
+    P     : (≥2,)       → retourne un bool scalaire
+            (M, ≥2)     → retourne un tableau bool (M,)
+    seuil : float
+    """
+    route  = np.asarray(route, dtype=float)
+    P      = np.asarray(P,     dtype=float)
+    scalar = P.ndim == 1
+    if scalar:
+        P = P[np.newaxis, :]       # (1, ≥2)
 
+    P   = P[:, :2]                 # (M, 2)
+    A   = route[:-1, :2]           # (K-1, 2)
+    B   = route[1:,  :2]
+    AB  = B - A                    # (K-1, 2)
+    ab2 = np.sum(AB ** 2, axis=1)  # (K-1,)
+
+    # AP : (M, K-1, 2)  via broadcasting
+    AP  = P[:, np.newaxis, :] - A[np.newaxis, :, :]
+    t   = np.where(ab2 > 1e-15,
+                   np.sum(AP * AB, axis=2) / ab2,
+                   0.0)                           # (M, K-1)
+    t   = np.clip(t, 0.0, 1.0)
+
+    closest = A + t[:, :, np.newaxis] * AB        # (M, K-1, 2)
+    d2      = np.sum((P[:, np.newaxis, :] - closest) ** 2, axis=2)  # (M, K-1)
+    result  = np.sqrt(d2.min(axis=1)) < seuil     # (M,)
+
+    return bool(result[0]) if scalar else result
