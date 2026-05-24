@@ -230,7 +230,7 @@ export default function App() {
   const [showCurrentRoute, setShowCurrentRoute] = useState(true);
   const [advOpen, setAdvOpen]       = useState(false);
   const [params, setParams]         = useState({
-    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3,
+    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3, seuil_nm: 20, facteur_raf: 5,
   });
   const [polarPct, setPolarPct]     = useState(100);
 
@@ -342,6 +342,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentFile, currentMeta, currentTimeH, currentStride, curRefH]);
 
+  // ── Reset routeResult si paramètres de départ changent ───────────────
+  useEffect(() => { setRouteResult(null); }, [depPoint, arrPoint, depTimeIdx]);
+
   // ── Pré-sélection dt ──────────────────────────────────────────────────
   useEffect(() => {
     if (!depPoint || !arrPoint) return;
@@ -443,6 +446,7 @@ export default function App() {
           ? (meta?.times?.[depTimeIdx] ?? 0)
           : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
+        ...(routeResult ? { route: routeResult.route } : {}),
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
@@ -594,6 +598,13 @@ export default function App() {
     [savedRoutes, activeRouteIds],
   );
 
+  const activeIsochrones = useMemo(() => {
+    const all = [];
+    if (showCurrentRoute && routeResult?.isochrones) all.push(...routeResult.isochrones);
+    extraRoutes.forEach(s => { if (s.routeResult?.isochrones) all.push(...s.routeResult.isochrones); });
+    return all;
+  }, [showCurrentRoute, routeResult, extraRoutes]);
+
   const boats = useMemo(() => {
     const result = [];
     if (showCurrentRoute && routeResult) {
@@ -624,7 +635,7 @@ export default function App() {
         arrPoint={arrPoint}
         route={showCurrentRoute ? (routeResult?.route ?? null) : null}
         boats={boats}
-        isochrones={routeResult?.isochrones ?? []}
+        isochrones={activeIsochrones}
         showIsochrones={showIsochrones}
         showGrib={showGrib}
         currentData={currentMode === 'uniform' ? uniformCurrentData : currentData}
@@ -955,6 +966,8 @@ export default function App() {
                 ['n caps',       'n',        20,   360, 10  ],
                 ['ang init (°)', 'ang_deg',  10,   180, 5   ],
                 ['dang/pas (°)', 'dang_deg', 0,    2,   0.05],
+                ['seuil (NM)',   'seuil_nm',   5,  200, 5   ],
+                ['facteur raf',  'facteur_raf', 1, 20,  1   ],
               ].map(([lbl, key, min, max, step]) => (
                 <label key={key} style={{ fontSize: 10, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {lbl}
@@ -966,21 +979,27 @@ export default function App() {
             </div>
           )}
 
-          {/* Bouton lancer */}
+          {/* Bouton lancer / raffiner */}
           <button onClick={runRouting} disabled={!canRoute}
             style={{
               width: '100%', padding: '9px 0', borderRadius: 8,
               fontSize: 13, fontWeight: 'bold', fontFamily: FONT,
               cursor: canRoute ? 'pointer' : 'not-allowed',
               background: canRoute
-                ? 'linear-gradient(135deg, #1455a4, #1e90d8)'
+                ? (routeResult && !routing
+                    ? 'linear-gradient(135deg, #0d6b3a, #1daa5e)'
+                    : 'linear-gradient(135deg, #1455a4, #1e90d8)')
                 : 'rgba(30,40,80,0.4)',
               color: canRoute ? 'white' : 'rgba(200,216,255,0.25)',
               border: 'none',
               marginTop: 2,
               marginBottom: routing ? 6 : (routeResult || routeError) ? 10 : 0,
             }}>
-            {routing ? 'Calcul en cours…' : 'Lancer le routage'}
+            {routing
+              ? 'Calcul en cours…'
+              : routeResult
+                ? 'Raffiner la route'
+                : 'Lancer le routage'}
           </button>
 
           {/* Barre de progression */}
@@ -1011,10 +1030,8 @@ export default function App() {
                 <div style={{ fontSize: 10, opacity: 0.5, marginBottom: 4 }}>Durée estimée</div>
                 <div style={{ fontSize: 22, color: '#4fc3f7', fontWeight: 'bold' }}>
                   {routeResult.days > 0 && <>{routeResult.days}<span style={{ fontSize: 13, opacity: 0.7 }}>j </span></>}
-                  {routeResult.hours}<span style={{ fontSize: 13, opacity: 0.7 }}>h</span>
-                  {params.dt < 1 && routeResult.minutes > 0 && (
-                    <>{String(routeResult.minutes).padStart(2, '0')}<span style={{ fontSize: 13, opacity: 0.7 }}>min</span></>
-                  )}
+                  {routeResult.hours}<span style={{ fontSize: 13, opacity: 0.7 }}>h </span>
+                  {String(routeResult.minutes).padStart(2, '0')}<span style={{ fontSize: 13, opacity: 0.7 }}>min</span>
                 </div>
                 <div style={{ fontSize: 10, opacity: 0.4, marginTop: 6 }}>
                   Calcul : {routeResult.calc_time_s}s
@@ -1188,7 +1205,8 @@ export default function App() {
                     {saved.routeResult.days > 0 && (
                       <>{saved.routeResult.days}<span style={{ fontSize: 10, opacity: 0.6 }}>j </span></>
                     )}
-                    {saved.routeResult.hours}<span style={{ fontSize: 10, opacity: 0.6 }}>h</span>
+                    {saved.routeResult.hours}<span style={{ fontSize: 10, opacity: 0.6 }}>h </span>
+                    {String(saved.routeResult.minutes).padStart(2, '0')}<span style={{ fontSize: 10, opacity: 0.6 }}>min</span>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button onClick={() => toggleSavedRoute(saved.id)} style={{

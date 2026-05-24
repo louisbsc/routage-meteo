@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
 from shapely import contains_xy
 from inputs.polaires import polaire as load_polaire, polaire_uniforme   # noqa: E402
-from core.isochrone import routage                    # noqa: E402
+from core.isochrone import routage, routage_raffine    # noqa: E402
 from inputs.courants import (  # noqa: E402
     table as current_table,
     courant_grib_deg as load_courant_deg,
@@ -335,6 +335,9 @@ class RoutingRequest(BaseModel):
     wind_uniform:    Optional[WindUniform] = None
     grib_courant_file: Optional[str] = None
     courant_uniform:   Optional[WindUniform] = None  # même structure direction/force
+    seuil_nm:          float = 20.0
+    facteur_raf:       float = 5.0
+    route:             Optional[List[List[float]]] = None  # [[lon, lat], …] route existante pour raffinement
 
 
 def _build_polar(req: "RoutingRequest"):
@@ -372,7 +375,7 @@ def _scale_polar(P, pct: float):
     return scaled
 
 
-def _build_isochrones(L, grib_file=None):
+def _build_isochrones(L, grib_file=None, break_inactive=False):
     """Construit les isochrones filtrées (terre + bbox GRIB) en segments contigus."""
     lon_min, lat_min, lon_max, lat_max = -180.0, -90.0, 180.0, 90.0
     if grib_file:
@@ -392,6 +395,8 @@ def _build_isochrones(L, grib_file=None):
         if in_bbox.any():
             on_land[in_bbox] = contains_xy(land_geom, lons[in_bbox], lats[in_bbox])
         keep = in_bbox & ~on_land
+        if break_inactive:
+            keep &= (pts[:, 3] >= 0)
         # Découpe en segments contigus : un point supprimé brise le tracé
         segment = []
         for i in range(len(pts)):
@@ -429,13 +434,26 @@ def run_routing(req: RoutingRequest):
     C = _build_courant(req)
 
     t0 = time.perf_counter()
-    lat, lon, time_list, L = routage(
-        p_dep, p_arr, req.t,
-        dt=req.dt, n=req.n, V=V, P=P,
-        ang=math.radians(req.ang_deg),
-        dang=math.radians(req.dang_deg),
-        C=C,
-    )
+    if req.route:
+        r_arr     = np.array(req.route, dtype=float)
+        route_lon = r_arr[:, 0]
+        route_lat = r_arr[:, 1]
+        lat, lon, time_list, L = routage_raffine(
+            route_lat, route_lon, p_dep, p_arr, req.t,
+            dt=req.dt, n=req.n, V=V, P=P,
+            ang=math.radians(req.ang_deg),
+            seuil=req.seuil_nm,
+            facteur_raf=req.facteur_raf,
+            C=C,
+        )
+    else:
+        lat, lon, time_list, L = routage(
+            p_dep, p_arr, req.t,
+            dt=req.dt, n=req.n, V=V, P=P,
+            ang=math.radians(req.ang_deg),
+            dang=math.radians(req.dang_deg),
+            C=C,
+        )
     calc_time_s = round(time.perf_counter() - t0, 2)
 
     route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
@@ -447,7 +465,7 @@ def run_routing(req: RoutingRequest):
     hours     = (total_min % (24 * 60)) // 60
     minutes   = total_min % 60
 
-    isochrones = _build_isochrones(L, grib_file=req.grib_file)
+    isochrones = _build_isochrones(L, grib_file=req.grib_file, break_inactive=req.route is not None)
 
     return {
         "route":        route,
@@ -491,20 +509,34 @@ def run_routing_stream(req: RoutingRequest):
     def _worker():
         try:
             t0 = time.perf_counter()
-            lat, lon, time_list, L = routage(
-                p_dep, p_arr, req.t,
-                dt=req.dt, n=req.n, V=V, P=P,
-                ang=math.radians(req.ang_deg),
-                dang=math.radians(req.dang_deg),
-                C=C,
-                progress_cb=_progress,
-            )
+            if req.route:
+                r_arr     = np.array(req.route, dtype=float)
+                route_lon = r_arr[:, 0]
+                route_lat = r_arr[:, 1]
+                lat, lon, time_list, L = routage_raffine(
+                    route_lat, route_lon, p_dep, p_arr, req.t,
+                    dt=req.dt, n=req.n, V=V, P=P,
+                    ang=math.radians(req.ang_deg),
+                    seuil=req.seuil_nm,
+            facteur_raf=req.facteur_raf,
+                    C=C,
+                    progress_cb=_progress,
+                )
+            else:
+                lat, lon, time_list, L = routage(
+                    p_dep, p_arr, req.t,
+                    dt=req.dt, n=req.n, V=V, P=P,
+                    ang=math.radians(req.ang_deg),
+                    dang=math.radians(req.dang_deg),
+                    C=C,
+                    progress_cb=_progress,
+                )
             calc_time_s = round(time.perf_counter() - t0, 2)
             route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
             route_times = time_list[:len(lat)].tolist()
             duration    = float(time_list[-1] - req.t)
             total_min   = int(round(duration * 60))
-            isochrones  = _build_isochrones(L, grib_file=req.grib_file)
+            isochrones  = _build_isochrones(L, grib_file=req.grib_file, break_inactive=req.route is not None)
             q.put_nowait({"type": "result",
                 "route": route, "time_list": route_times, "isochrones": isochrones,
                 "duration_h": duration,

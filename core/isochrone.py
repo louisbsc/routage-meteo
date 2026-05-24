@@ -200,3 +200,12 @@ def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, C=None, progress_cb=None):
 
 	return latitude, longitude, time_list, L
 
+def routage_raffine(route_lat, route_lon, p_dep, p_arr, t, dt, n, V, P, ang, seuil=20, facteur_raf = 5, C=None, progress_cb=None):
+	"""Raffinement d'une route existante : vent réduit au corridor, dt/4, dang=0."""
+	from inputs.vents import vent_filtre_route
+
+	route_nm = np.column_stack([route_lon * 60 * 0.7, route_lat * 60])
+	V_red = vent_filtre_route(V, route_nm, seuil)
+
+	return routage(p_dep, p_arr, t, dt / facteur_raf, n, V_red, P, ang, 0, C=C, progress_cb=progress_cb)
+
