@@ -238,6 +238,8 @@ export default function App() {
   const [savedRoutes, setSavedRoutes] = useState([]);
   const [routeCounter, setRouteCounter] = useState(1);
   const [activeRouteIds, setActiveRouteIds] = useState(new Set());
+  const [selectedRouteId, setSelectedRouteId] = useState(null);
+  const [savedIsoVisible, setSavedIsoVisible] = useState({});
 
   // ── Init ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -395,8 +397,10 @@ export default function App() {
       routeDepAbsH,
       color: SAVED_ROUTE_COLORS[savedRoutes.length % SAVED_ROUTE_COLORS.length],
     }]);
+    setSavedIsoVisible(p => ({ ...p, [id]: true }));
     setRouteCounter(c => c + 1);
     setActiveRouteIds(prev => new Set([...prev, id]));
+    setSelectedRouteId(id);
     setShowCurrentRoute(false);
   };
 
@@ -410,11 +414,9 @@ export default function App() {
 
   const deleteSavedRoute = (id) => {
     setSavedRoutes(r => r.filter(s => s.id !== id));
-    setActiveRouteIds(prev => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
+    setActiveRouteIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+    setSavedIsoVisible(p => { const next = { ...p }; delete next[id]; return next; });
+    if (selectedRouteId === id) setSelectedRouteId(null);
   };
 
   const handleMapClick = useCallback(([lat, lon]) => {
@@ -530,18 +532,45 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentMode, viewState, uniformCurrent, uniformCurrentStride]);
 
-  // ── Position du bateau sur la route courante (pour le HUD) ───────────
+  // ── Computed ──────────────────────────────────────────────────────────
+  // currentTimeH est en heures absolues depuis l'époque Unix
+  const timeLabel = useMemo(() => {
+    if (!meta && !currentMeta) return '—';
+    return fmtDatetime(new Date(currentTimeH * 3600000).toISOString());
+  }, [meta, currentMeta, currentTimeH]);
+
+  const extraRoutes = useMemo(
+    () => savedRoutes.filter(s => activeRouteIds.has(s.id)),
+    [savedRoutes, activeRouteIds],
+  );
+
+  const focusedSaved = useMemo(
+    () => selectedRouteId ? savedRoutes.find(s => s.id === selectedRouteId) ?? null : null,
+    [selectedRouteId, savedRoutes],
+  );
+  const focusedResult  = focusedSaved?.routeResult  ?? routeResult;
+  const focusedDepAbsH = focusedSaved?.routeDepAbsH ?? routeDepAbsH;
+
+  const isoChecked = selectedRouteId
+    ? (savedIsoVisible[selectedRouteId] ?? true)
+    : showIsochrones;
+  const setIsoChecked = (v) => {
+    if (selectedRouteId) setSavedIsoVisible(p => ({ ...p, [selectedRouteId]: v }));
+    else setShowIsochrones(v);
+  };
+
+  // ── Position du bateau sur la route focalisée (pour le HUD) ──────────
   const boatPosition = useMemo(() => {
-    if (!showCurrentRoute) return null;
-    return computeBoatPosition(routeResult, routeDepAbsH, currentTimeH);
-  }, [showCurrentRoute, routeResult, routeDepAbsH, currentTimeH]);
+    if (!focusedResult) return null;
+    return computeBoatPosition(focusedResult, focusedDepAbsH, currentTimeH);
+  }, [focusedResult, focusedDepAbsH, currentTimeH]);
 
   // ── Infos bateau à l'instant courant ──────────────────────────────────
   const boatInfo = useMemo(() => {
-    const tl = routeResult?.time_list;
-    const rt = routeResult?.route;
-    if (!tl || !rt || tl.length < 2 || !boatPosition || routeDepAbsH === null) return null;
-    const base = routeDepAbsH - tl[0];
+    const tl = focusedResult?.time_list;
+    const rt = focusedResult?.route;
+    if (!tl || !rt || tl.length < 2 || !boatPosition || focusedDepAbsH === null) return null;
+    const base = focusedDepAbsH - tl[0];
     const tlAbs = tl.map(t => base + t);
 
     let i = 0;
@@ -584,26 +613,18 @@ export default function App() {
       : null;
 
     return { speed, windSpeed, angVent };
-  }, [routeResult, boatPosition, currentTimeH, windMode, uniformWind, windData, routeDepAbsH]);
-
-  // ── Computed ──────────────────────────────────────────────────────────
-  // currentTimeH est en heures absolues depuis l'époque Unix
-  const timeLabel = useMemo(() => {
-    if (!meta && !currentMeta) return '—';
-    return fmtDatetime(new Date(currentTimeH * 3600000).toISOString());
-  }, [meta, currentMeta, currentTimeH]);
-
-  const extraRoutes = useMemo(
-    () => savedRoutes.filter(s => activeRouteIds.has(s.id)),
-    [savedRoutes, activeRouteIds],
-  );
+  }, [focusedResult, boatPosition, currentTimeH, windMode, uniformWind, windData, focusedDepAbsH]);
 
   const activeIsochrones = useMemo(() => {
     const all = [];
-    if (showCurrentRoute && routeResult?.isochrones) all.push(...routeResult.isochrones);
-    extraRoutes.forEach(s => { if (s.routeResult?.isochrones) all.push(...s.routeResult.isochrones); });
+    if (showCurrentRoute && showIsochrones && routeResult?.isochrones)
+      all.push(...routeResult.isochrones);
+    extraRoutes.forEach(s => {
+      if ((savedIsoVisible[s.id] ?? true) && s.routeResult?.isochrones)
+        all.push(...s.routeResult.isochrones);
+    });
     return all;
-  }, [showCurrentRoute, routeResult, extraRoutes]);
+  }, [showCurrentRoute, showIsochrones, routeResult, extraRoutes, savedIsoVisible]);
 
   const boats = useMemo(() => {
     const result = [];
@@ -646,7 +667,7 @@ export default function App() {
       />
 
       {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
-      {routeResult && boatInfo && (
+      {focusedResult && boatInfo && (
         <div style={{
           position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
           zIndex: 10, pointerEvents: 'none',
@@ -900,9 +921,9 @@ export default function App() {
         <div style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Routage</div>
-            {routeResult && (
+            {(routeResult || focusedSaved) && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-                <input type="checkbox" checked={showIsochrones} onChange={e => setShowIsochrones(e.target.checked)}
+                <input type="checkbox" checked={isoChecked} onChange={e => setIsoChecked(e.target.checked)}
                   style={{ accentColor: '#4fc3f7', cursor: 'pointer' }} />
                 Isochrones
               </label>
@@ -1173,25 +1194,29 @@ export default function App() {
               Routes sauvegardées
             </div>
             {savedRoutes.map((saved, idx) => {
-              const active = activeRouteIds.has(saved.id);
+              const active   = activeRouteIds.has(saved.id);
+              const selected = selectedRouteId === saved.id;
               const [r, g, b] = saved.color;
               const accent = `rgb(${r},${g},${b})`;
               return (
-                <div key={saved.id} style={{
-                  background: active ? `rgba(${r},${g},${b},0.07)` : 'rgba(20,30,60,0.6)',
-                  borderRadius: 8,
-                  padding: '9px 10px',
-                  marginBottom: idx < savedRoutes.length - 1 ? 8 : 0,
-                  border: `1px solid ${active ? `rgba(${r},${g},${b},0.55)` : 'rgba(100,160,255,0.15)'}`,
-                  transition: 'border 0.2s, background 0.2s',
-                }}>
+                <div key={saved.id}
+                  onClick={() => setSelectedRouteId(id => id === saved.id ? null : saved.id)}
+                  style={{
+                    background: selected ? `rgba(${r},${g},${b},0.18)` : active ? `rgba(${r},${g},${b},0.07)` : 'rgba(20,30,60,0.6)',
+                    borderRadius: 8,
+                    padding: '9px 10px',
+                    marginBottom: idx < savedRoutes.length - 1 ? 8 : 0,
+                    border: `${selected ? 2 : 1}px solid ${selected ? accent : active ? `rgba(${r},${g},${b},0.55)` : 'rgba(100,160,255,0.15)'}`,
+                    transition: 'border 0.2s, background 0.2s',
+                    cursor: 'pointer',
+                  }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
                     <div style={{
                       width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
                       background: accent, opacity: active ? 1 : 0.35,
                       transition: 'opacity 0.2s',
                     }} />
-                    <div style={{ fontSize: 12, color: active ? accent : '#7ec8f7', fontWeight: 'bold' }}>
+                    <div style={{ fontSize: 12, color: selected ? accent : active ? accent : '#7ec8f7', fontWeight: 'bold' }}>
                       {saved.name}
                     </div>
                   </div>
