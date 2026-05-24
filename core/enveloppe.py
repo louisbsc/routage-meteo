@@ -179,15 +179,22 @@ def points_les_plus_a(N, ang, p_dep, delta):
     return p, p_ref
 
 
-def enveloppe(N, r, p_dep, p_arr, ang, delta):
+def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
 
     p_dep = np.array(p_dep, dtype=float)
     p_arr = np.array(p_arr, dtype=float)
     dir = f.angle_direction(p_dep, p_arr)
     p1, p = points_les_plus_a(N, dir + ang, p_dep, delta)
 
-    #voisins1 = pointsautour_np(p1, P, r)
     tree = cKDTree(N[:, :2])
+
+    if I is not None:
+        inactive_lookup = {int(-pt[3]) - 1: pt for pt in N if pt[3] < 0}
+        inactive_I_set  = set(inactive_lookup.keys())
+    else:
+        inactive_lookup = {}
+        inactive_I_set  = set()
+
     voisins1 = N[tree.query_ball_point(p1[:2], r)]
 
     #angles1 = np.abs(np.array([f.angleoriente3_np(p, p1, x) for x in voisins1]))
@@ -234,6 +241,22 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta):
             idx = candidats[np.argmin(dists)]
 
         p3 = voisins[idx]
+
+        if p3[3] < 0 and inactive_I_set:
+            j = int(-p3[3]) - 1
+            chain = [p3]
+            jf = j + 1
+            while jf in inactive_I_set:
+                chain.append(inactive_lookup[jf])
+                jf += 1
+            if len(chain) > 30:
+                for pt in chain[:-30]:
+                    l[k] = pt
+                    k += 1
+                p1 = l[k - 2]
+                p2 = l[k - 1]
+                angle_oriente = f.angle_oriente_negatif(l[1], p_dep, p2)
+                continue
 
         if max_angle > np.pi:
 

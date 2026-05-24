@@ -63,51 +63,65 @@ def iso_point(p, t, dt, n, V, P, C=None, n_dense=180):
 
 
 def nuage_iso(I, t, dt, n, V, P, C=None, n_dense=180):
-	M    = len(I)
-	wind = V(I, t)  # (M, 2) : [dir_from, speed]
+	active_mask   = I[:, 3] >= 0
+	inactive_mask = ~active_mask
+	parts = []
 
-	if C is not None:
-		current = C(I, t)  # (M, 2) : [dir_from, speed]
-		# Composantes (est, nord) en nœuds – convention "provenance" → signe négatif
-		d_w = np.radians(wind[:, 0])
-		d_c = np.radians(current[:, 0])
-		u_wind = -wind[:, 1] * np.sin(d_w)
-		v_wind = -wind[:, 1] * np.cos(d_w)
-		u_cur  = -current[:, 1] * np.sin(d_c)
-		v_cur  = -current[:, 1] * np.cos(d_c)
-		# Vent surface = vent météo − vecteur courant
-		u_surf = u_wind - u_cur
-		v_surf = v_wind - v_cur
-		surf_speed = np.sqrt(u_surf**2 + v_surf**2)
-		# Direction provenance du vent surface (même convention que vent_grib_nm)
-		surf_dir = (np.degrees(np.arctan2(u_surf, v_surf)) + 180) % 360
-		# Dérive courant sur le pas de temps (unités coord = NM)
-		dx_cur = u_cur * dt
-		dy_cur = v_cur * dt
-	else:
-		surf_speed = wind[:, 1]
-		surf_dir   = wind[:, 0]
-		dx_cur = np.zeros(M)
-		dy_cur = np.zeros(M)
+	if active_mask.any():
+		idx_act = np.where(active_mask)[0]
+		I_act   = I[idx_act]
+		wind    = V(I_act, t)
 
-	dx_dense, dy_dense = _polar_offsets_batch(surf_dir, surf_speed, dt, P, n_dense)
-	# Déplacement fond = déplacement eau + dérive courant
-	dx_dense += dx_cur[:, None]
-	dy_dense += dy_cur[:, None]
+		if C is not None:
+			current = C(I_act, t)
+			d_w = np.radians(wind[:, 0])
+			d_c = np.radians(current[:, 0])
+			u_wind = -wind[:, 1] * np.sin(d_w)
+			v_wind = -wind[:, 1] * np.cos(d_w)
+			u_cur  = -current[:, 1] * np.sin(d_c)
+			v_cur  = -current[:, 1] * np.cos(d_c)
+			u_surf = u_wind - u_cur
+			v_surf = v_wind - v_cur
+			surf_speed = np.sqrt(u_surf**2 + v_surf**2)
+			surf_dir   = (np.degrees(np.arctan2(u_surf, v_surf)) + 180) % 360
+			dx_cur = u_cur * dt
+			dy_cur = v_cur * dt
+		else:
+			surf_speed = wind[:, 1]
+			surf_dir   = wind[:, 0]
+			dx_cur = np.zeros(len(idx_act))
+			dy_cur = np.zeros(len(idx_act))
 
-	all_x, all_y = _arc_resample_batch(dx_dense, dy_dense, n)
-	all_x += I[:, 0:1]
-	all_y += I[:, 1:2]
+		dx_dense, dy_dense = _polar_offsets_batch(surf_dir, surf_speed, dt, P, n_dense)
+		dx_dense += dx_cur[:, None]
+		dy_dense += dy_cur[:, None]
+		all_x, all_y = _arc_resample_batch(dx_dense, dy_dense, n)
+		all_x += I_act[:, 0:1]
+		all_y += I_act[:, 1:2]
+		index_iso     = np.repeat(I_act[:, 2] + 1, n)
+		index_origine = np.repeat(idx_act.astype(float), n)
+		parts.append(np.column_stack([all_x.ravel(), all_y.ravel(), index_iso, index_origine]))
 
-	index_iso     = np.repeat(I[:, 2] + 1, n)
-	index_origine = np.repeat(np.arange(M, dtype=float), n)
-	points = np.column_stack([all_x.ravel(), all_y.ravel(), index_iso, index_origine])
+	if inactive_mask.any():
+		idx_inact = np.where(inactive_mask)[0]
+		parts.append(np.column_stack([
+			I[idx_inact, 0], I[idx_inact, 1],
+			I[idx_inact, 2] + 1,
+			-(idx_inact + 1).astype(float),
+		]))
+
+	points = np.vstack(parts)
 	_, idx_unique = np.unique(np.round(points[:, :2], decimals=3), axis=0, return_index=True)
 	return points[idx_unique]
 
 def iso_suivante(I, p_dep, p_arr, t, dt, n, V, P, r, ang, C=None):
-	L = nuage_iso(I, t, dt, n, V, P, C=C)
-	return env.enveloppe(L, r, p_dep, p_arr, ang, r)
+	L     = nuage_iso(I, t, dt, n, V, P, C=C)
+	I_new = env.enveloppe(L, r, p_dep, p_arr, ang, r, I=I)
+	wind_new = V(I_new, t + dt)
+	inact = np.where(wind_new[:, 1] == 0.0)[0]
+	if inact.size:
+		I_new[inact, 3] = -(inact + 1).astype(float)
+	return I_new
 
 def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, C=None):
 	I0 = np.array([p_dep], dtype=float)
@@ -141,6 +155,10 @@ def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, C=None, progre
 	print(f"nombre isochrones : 0, temps : {t:.2f} heures, nombre de points : {len(I0)}")
 	I = iso_point(p_dep, t, dt, n, V, P, C=C)
 	I = env.enveloppe(I, r, p_dep, p_arr, ang, r)
+	wind_first = V(I, t + dt)
+	inact_first = np.where(wind_first[:, 1] == 0.0)[0]
+	if inact_first.size:
+		I[inact_first, 3] = -(inact_first + 1).astype(float)
 	L = [I0, I]
 	print(f"nombre isochrones : {len(L) - 1}, temps : {t + dt:.2f} heures, nombre de points : {len(I)}")
 	while not iso_est_arrive(I, p_arr, e_arr):
