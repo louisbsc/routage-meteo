@@ -57,15 +57,6 @@ const SAVED_ROUTE_COLORS = [
   [255, 112,  67, 230],
 ];
 
-const STEP_OPTIONS = [
-  { label: '1min',  h: 1 / 60 },
-  { label: '10min', h: 10 / 60 },
-  { label: '30min', h: 0.5 },
-  { label: '1h',    h: 1 },
-  { label: '2h',    h: 2 },
-  { label: '3h',    h: 3 },
-  { label: '5h',    h: 5 },
-];
 
 const card = {
   background: 'rgba(8,13,30,0.92)', backdropFilter: 'blur(12px)',
@@ -188,15 +179,31 @@ export default function App() {
   const [file, setFile]             = useState('');
   const [meta, setMeta]             = useState(null);
   const [currentTimeH, setCurrentTimeH] = useState(0);  // heure absolue (offset GRIB)
-  const [stride, setStride]         = useState(2);
   const [showGrib, setShowGrib]     = useState(true);
-  const [stepIdx, setStepIdx] = useState(3);  // index dans STEP_OPTIONS (défaut 1h)
   const [windData, setWindData]     = useState([]);
   const [windLoading, setWindLoading] = useState(false);
   const [viewState, setViewState]   = useState(INIT_VIEW);
+
+  // ~15 colonnes de flèches visibles quelle que soit le zoom
+  const autoStep = useMemo(() => {
+    const lonSpan = (360 / Math.pow(2, viewState.zoom)) * (window.innerWidth / 256);
+    return Math.max(0.05, lonSpan / 160);
+  }, [viewState.zoom]);
+
+  const viewport = useMemo(() => {
+    const { longitude, latitude, zoom } = viewState;
+    const lonSpan = (360 / Math.pow(2, zoom)) * (window.innerWidth  / 256) * 1.4;
+    const latSpan = (360 / Math.pow(2, zoom)) * (window.innerHeight / 256) * 1.4;
+    return {
+      lon0: Math.max(-180, longitude - lonSpan / 2),
+      lon1: Math.min( 180, longitude + lonSpan / 2),
+      lat0: Math.max( -85, latitude  - latSpan / 2),
+      lat1: Math.min(  85, latitude  + latSpan / 2),
+    };
+  }, [viewState]);
+
   const [windMode, setWindMode]       = useState('grib');  // 'grib' | 'uniform'
   const [uniformWind, setUniformWind] = useState({ direction: 270, force: 15 });
-  const [uniformStride, setUniformStride] = useState(3);  // 1=dense … 5=sparse
   const [uniformWindData, setUniformWindData] = useState([]);
 
   // Current
@@ -205,11 +212,9 @@ export default function App() {
   const [currentMeta, setCurrentMeta]           = useState(null);
   const [currentData, setCurrentData]           = useState([]);
   const [currentLoading, setCurrentLoading]     = useState(false);
-  const [currentStride, setCurrentStride]       = useState(2);
   const [showCurrent, setShowCurrent]           = useState(true);
   const [currentMode, setCurrentMode]           = useState('grib');  // 'grib' | 'uniform'
   const [uniformCurrent, setUniformCurrent]     = useState({ direction: 180, force: 0.5 });
-  const [uniformCurrentStride, setUniformCurrentStride] = useState(3);
   const [uniformCurrentData, setUniformCurrentData]     = useState([]);
 
   // Routing
@@ -274,6 +279,15 @@ export default function App() {
     [currentMeta],
   );
 
+  const { sliderMin, sliderMax } = useMemo(() => {
+    const candidates = [
+      ...(meta        && windRefH !== null ? [windRefH + meta.times[0],        windRefH + meta.times[meta.times.length - 1]]               : []),
+      ...(currentMeta && curRefH  !== null ? [curRefH  + currentMeta.times[0], curRefH  + currentMeta.times[currentMeta.times.length - 1]] : []),
+    ];
+    if (!candidates.length) return { sliderMin: 0, sliderMax: 0 };
+    return { sliderMin: Math.min(...candidates), sliderMax: Math.max(...candidates) };
+  }, [meta, windRefH, currentMeta, curRefH]);
+
   // Index GRIB le plus proche de l'heure courante du slider
   const nearestGribIdx = useMemo(() => {
     if (!meta || windRefH === null) return 0;
@@ -296,14 +310,15 @@ export default function App() {
       return;
     }
     setWindLoading(true);
+    const { lat0, lat1, lon0, lon1 } = viewport;
     const timer = setTimeout(() => {
-      fetch(`${API}/wind/${encodeURIComponent(file)}/interpolated?t=${tWind}&stride=${stride}`)
+      fetch(`${API}/wind/${encodeURIComponent(file)}/grid?t=${tWind}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}`)
         .then(r => r.json())
         .then(({ data }) => { setWindData(data); setWindLoading(false); })
         .catch(() => setWindLoading(false));
     }, 80);
     return () => clearTimeout(timer);
-  }, [file, meta, currentTimeH, stride, windRefH]);
+  }, [file, meta, currentTimeH, windRefH, viewport, autoStep]);
 
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
@@ -335,14 +350,15 @@ export default function App() {
       return;
     }
     setCurrentLoading(true);
+    const { lat0, lat1, lon0, lon1 } = viewport;
     const timer = setTimeout(() => {
-      fetch(`${API}/current/${encodeURIComponent(currentFile)}/interpolated?t=${tCur}&stride=${currentStride}`)
+      fetch(`${API}/current/${encodeURIComponent(currentFile)}/grid?t=${tCur}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}`)
         .then(r => r.json())
         .then(({ data }) => { setCurrentData(data); setCurrentLoading(false); })
         .catch(() => setCurrentLoading(false));
     }, 80);
     return () => clearTimeout(timer);
-  }, [currentFile, currentMeta, currentTimeH, currentStride, curRefH]);
+  }, [currentFile, currentMeta, currentTimeH, curRefH, viewport, autoStep]);
 
   // ── Reset routeResult si paramètres de départ changent ───────────────
   useEffect(() => { setRouteResult(null); }, [depPoint, arrPoint, depTimeIdx]);
@@ -386,6 +402,17 @@ export default function App() {
       })
       .catch(() => {});
   }, [depPoint, arrPoint, polaire, propulsionMode, motorSpeed]);
+
+  // ── Navigation clavier du slider de temps ────────────────────────────
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.key === 'ArrowUp'   || e.key === 'ArrowDown')  e.preventDefault();
+      if (e.key === 'ArrowRight') { e.preventDefault(); setCurrentTimeH(t => Math.min(sliderMax, t + 1)); }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); setCurrentTimeH(t => Math.max(sliderMin, t - 1)); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [sliderMin, sliderMax]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
   const toggleSavedRoute = (id) => {
@@ -495,43 +522,27 @@ export default function App() {
     }
   };
 
-  // ── Grille vent uniforme (fetch backend, ancrée en geo, sans terre) ──────
-  const UNIFORM_STEPS = [4, 2, 1, 0.5, 0.25];  // degrés selon stride 1→5
-
+  // ── Grille vent uniforme ──────────────────────────────────────────────
   useEffect(() => {
     if (windMode !== 'uniform') { setUniformWindData([]); return; }
-    const { longitude, latitude, zoom } = viewState;
-    const lonSpan = (360 / Math.pow(2, zoom)) * (window.innerWidth  / 256) * 1.3;
-    const latSpan = (360 / Math.pow(2, zoom)) * (window.innerHeight / 256) * 1.3;
-    const lon0 = Math.max(-180, longitude - lonSpan / 2);
-    const lon1 = Math.min(180,  longitude + lonSpan / 2);
-    const lat0 = Math.max(-85,  latitude  - latSpan / 2);
-    const lat1 = Math.min(85,   latitude  + latSpan / 2);
-    const step = UNIFORM_STEPS[uniformStride - 1];
-    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${step}&direction=${uniformWind.direction}&force=${uniformWind.force}`;
+    const { lat0, lat1, lon0, lon1 } = viewport;
+    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}&direction=${uniformWind.direction}&force=${uniformWind.force}`;
     const timer = setTimeout(() => {
       fetch(url).then(r => r.json()).then(({ data }) => setUniformWindData(data)).catch(() => {});
     }, 120);
     return () => clearTimeout(timer);
-  }, [windMode, viewState, uniformWind, uniformStride]);
+  }, [windMode, viewport, uniformWind, autoStep]);
 
   // ── Grille courant uniforme ───────────────────────────────────────────
   useEffect(() => {
     if (currentMode !== 'uniform') { setUniformCurrentData([]); return; }
-    const { longitude, latitude, zoom } = viewState;
-    const lonSpan = (360 / Math.pow(2, zoom)) * (window.innerWidth  / 256) * 1.3;
-    const latSpan = (360 / Math.pow(2, zoom)) * (window.innerHeight / 256) * 1.3;
-    const lon0 = Math.max(-180, longitude - lonSpan / 2);
-    const lon1 = Math.min(180,  longitude + lonSpan / 2);
-    const lat0 = Math.max(-85,  latitude  - latSpan / 2);
-    const lat1 = Math.min(85,   latitude  + latSpan / 2);
-    const step = UNIFORM_STEPS[uniformCurrentStride - 1];
-    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${step}&direction=${uniformCurrent.direction}&force=${uniformCurrent.force}`;
+    const { lat0, lat1, lon0, lon1 } = viewport;
+    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}&direction=${uniformCurrent.direction}&force=${uniformCurrent.force}`;
     const timer = setTimeout(() => {
       fetch(url).then(r => r.json()).then(({ data }) => setUniformCurrentData(data)).catch(() => {});
     }, 120);
     return () => clearTimeout(timer);
-  }, [currentMode, viewState, uniformCurrent, uniformCurrentStride]);
+  }, [currentMode, viewport, uniformCurrent, autoStep]);
 
   // ── Computed ──────────────────────────────────────────────────────────
   // currentTimeH est en heures absolues depuis l'époque Unix
@@ -738,27 +749,6 @@ export default function App() {
                 <option value="">— Choisir un fichier —</option>
                 {files.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
-              {meta && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 14px' }}>
-                  <div>
-                    <label style={labelStyle}>
-                      Densité <strong style={{ color: '#60a5fa' }}>1/{stride}</strong>
-                      <span style={{ opacity: 0.35, marginLeft: 6 }}>({windData.length.toLocaleString()})</span>
-                    </label>
-                    <input type="range" min={1} max={6} value={stride}
-                      onChange={e => setStride(+e.target.value)}
-                      style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>
-                      Pas <strong style={{ color: '#60a5fa' }}>{STEP_OPTIONS[stepIdx].label}</strong>
-                    </label>
-                    <input type="range" min={0} max={STEP_OPTIONS.length - 1} value={stepIdx}
-                      onChange={e => { setStepIdx(+e.target.value); setCurrentTimeH(meta.times[0] ?? 0); }}
-                      style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
-                  </div>
-                </div>
-              )}
               {windLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
             </>
           ) : (
@@ -777,13 +767,6 @@ export default function App() {
                     style={{ ...inputStyle, padding: '5px 8px', fontSize: 12 }} />
                 </label>
               </div>
-              <label style={labelStyle}>
-                Densité <strong style={{ color: '#60a5fa' }}>{['très sparse', 'sparse', 'normale', 'dense', 'très dense'][uniformStride - 1]}</strong>
-                <span style={{ opacity: 0.35, marginLeft: 6 }}>({uniformWindData.length} pts)</span>
-              </label>
-              <input type="range" min={1} max={5} value={uniformStride}
-                onChange={e => setUniformStride(+e.target.value)}
-                style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
             </>
           )}
         </div>
@@ -824,17 +807,6 @@ export default function App() {
                 <option value="">— Choisir un fichier —</option>
                 {currentFiles.map(f => <option key={f} value={f}>{f}</option>)}
               </select>
-              {currentMeta && (
-                <div>
-                  <label style={labelStyle}>
-                    Densité <strong style={{ color: '#60a5fa' }}>1/{currentStride}</strong>
-                    <span style={{ opacity: 0.35, marginLeft: 6 }}>({currentData.length.toLocaleString()})</span>
-                  </label>
-                  <input type="range" min={1} max={6} value={currentStride}
-                    onChange={e => setCurrentStride(+e.target.value)}
-                    style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
-                </div>
-              )}
               {currentLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
             </>
           ) : (
@@ -853,13 +825,6 @@ export default function App() {
                     style={{ ...inputStyle, padding: '5px 8px', fontSize: 12 }} />
                 </label>
               </div>
-              <label style={labelStyle}>
-                Densité <strong style={{ color: '#60a5fa' }}>{['très sparse', 'sparse', 'normale', 'dense', 'très dense'][uniformCurrentStride - 1]}</strong>
-                <span style={{ opacity: 0.35, marginLeft: 6 }}>({uniformCurrentData.length} pts)</span>
-              </label>
-              <input type="range" min={1} max={5} value={uniformCurrentStride}
-                onChange={e => setUniformCurrentStride(+e.target.value)}
-                style={{ width: '100%', accentColor: '#60a5fa', cursor: 'pointer' }} />
             </>
           )}
         </div>
@@ -1072,13 +1037,6 @@ export default function App() {
 
 {/* ══ Barre de temps ══════════════════════════════════════════════════ */}
       {(meta || currentMeta) && (() => {
-        // Plage du slider : union des deux fichiers en heures absolues
-        const candidates = [
-          ...(meta        && windRefH !== null ? [windRefH + meta.times[0],        windRefH + meta.times[meta.times.length - 1]]               : []),
-          ...(currentMeta && curRefH  !== null ? [curRefH  + currentMeta.times[0], curRefH  + currentMeta.times[currentMeta.times.length - 1]] : []),
-        ];
-        const sliderMin = Math.min(...candidates);
-        const sliderMax = Math.max(...candidates);
         const sliderRange = sliderMax - sliderMin;
 
         // Bandes GRIB pour l'indicateur (GRIB uniquement, pas uniforme)
@@ -1155,7 +1113,7 @@ export default function App() {
               <input
                 type="range"
                 min={sliderMin} max={sliderMax}
-                step={meta ? STEP_OPTIONS[stepIdx].h : 1}
+                step={1}
                 value={currentTimeH}
                 onChange={e => setCurrentTimeH(+e.target.value)}
                 style={{

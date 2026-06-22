@@ -201,6 +201,40 @@ def uniform_grid(
     ]}
 
 
+# ── endpoint grille vent GRIB viewport (après uniform/grid pour éviter conflit) ──
+
+@app.get("/wind/{filename}/grid")
+def get_wind_grid(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
+    if not (GRIB_DIR / filename).exists():
+        raise HTTPException(404, "File not found")
+    V = _get_V_deg(str(GRIB_DIR / filename))
+    lat_start = math.ceil(lat0 / step) * step
+    lon_start = math.ceil(lon0 / step) * step
+    lats = np.arange(lat_start, lat1 + step / 2, step)
+    lons = np.arange(lon_start, lon1 + step / 2, step)
+    if lats.size == 0 or lons.size == 0:
+        return {"data": []}
+    lo, la = np.meshgrid(lons, lats)
+    la_f = la.ravel().astype(float)
+    lo_f = lo.ravel().astype(float)
+    df = _load(filename)
+    in_bbox = (
+        (lo_f >= float(df["longitude"].min())) & (lo_f <= float(df["longitude"].max())) &
+        (la_f >= float(df["latitude"].min()))  & (la_f <= float(df["latitude"].max()))
+    )
+    if not in_bbox.any():
+        return {"data": []}
+    pts  = np.column_stack([lo_f[in_bbox], la_f[in_bbox]])
+    wind = V(pts, t)
+    keep = ~contains_xy(land_geom, lo_f[in_bbox], la_f[in_bbox])
+    return {"time_h": float(t), "data": pd.DataFrame({
+        "lat":   np.round(la_f[in_bbox][keep], 4),
+        "lon":   np.round(lo_f[in_bbox][keep], 4),
+        "dir":   np.round(wind[keep, 0], 1),
+        "speed": np.round(wind[keep, 1], 2),
+    }).to_dict(orient="records")}
+
+
 # ── helpers courant ────────────────────────────────────────────────────────
 
 def _load_current(filename: str):
@@ -296,6 +330,41 @@ def get_current_interpolated(filename: str, t: float, stride: int = 2):
     })
     df_out = df_out[df_out["speed"] > 0.01]
     return {"time_h": float(t), "data": df_out.to_dict(orient="records")}
+
+
+# ── endpoint grille courant GRIB viewport ─────────────────────────────────
+
+@app.get("/current/{filename}/grid")
+def get_current_grid_view(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
+    if not (GRIB_COURANT_DIR / filename).exists():
+        raise HTTPException(404, "File not found")
+    C = _get_courant(str(GRIB_COURANT_DIR / filename))
+    lat_start = math.ceil(lat0 / step) * step
+    lon_start = math.ceil(lon0 / step) * step
+    lats = np.arange(lat_start, lat1 + step / 2, step)
+    lons = np.arange(lon_start, lon1 + step / 2, step)
+    if lats.size == 0 or lons.size == 0:
+        return {"data": []}
+    lo, la = np.meshgrid(lons, lats)
+    la_f = la.ravel().astype(float)
+    lo_f = lo.ravel().astype(float)
+    df = _load_current(filename)
+    in_bbox = (
+        (lo_f >= float(df["lon"].min())) & (lo_f <= float(df["lon"].max())) &
+        (la_f >= float(df["lat"].min())) & (la_f <= float(df["lat"].max()))
+    )
+    if not in_bbox.any():
+        return {"data": []}
+    pts     = np.column_stack([lo_f[in_bbox], la_f[in_bbox]])
+    current = C(pts, t)
+    on_land = contains_xy(land_geom, lo_f[in_bbox], la_f[in_bbox])
+    keep    = ~on_land & (current[:, 1] > 0.01)
+    return {"time_h": float(t), "data": pd.DataFrame({
+        "lat":   np.round(la_f[in_bbox][keep], 4),
+        "lon":   np.round(lo_f[in_bbox][keep], 4),
+        "dir":   np.round(current[keep, 0], 1),
+        "speed": np.round(current[keep, 1], 3),
+    }).to_dict(orient="records")}
 
 
 # ── endpoints routage ───────────────────────────────────────────────────────

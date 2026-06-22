@@ -215,7 +215,7 @@ export default function WindMap({
   return (
     <DeckGL
       viewState={viewState}
-      controller={{ dragPan: true, scrollZoom: true, doubleClickZoom: true }}
+      controller={{ dragPan: true, scrollZoom: true, doubleClickZoom: true, keyboard: false }}
       onViewStateChange={e => onViewStateChange(e.viewState)}
       layers={layers}
       onClick={e => {
