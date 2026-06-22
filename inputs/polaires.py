@@ -57,7 +57,7 @@ def polaire_uniforme(c):
         out = np.full(shape, float(c))
         out[np.broadcast_to(f_arr, shape) == 0] = 0.0
         return out
-    P.v_max = float(c)
+    P.v_max = float(2 * c)
     return P
 
 # POLAIRES RÉELLES

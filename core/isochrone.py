@@ -187,7 +187,7 @@ def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, C=None, progress_cb=None):
 	p_arr = [p_arr[1] * 60 * 0.7, p_arr[0] * 60]
 
 	e_arr = P.v_max * dt / 2
-	r = P.v_max * dt * 2 * np.pi / n
+	r = P.v_max * dt * 2 * np.pi / n * 1.5
 	L, route, time_list = toutes_iso(
 		p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang,
 		C=C, progress_cb=progress_cb,

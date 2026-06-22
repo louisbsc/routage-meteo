@@ -361,7 +361,8 @@ export default function App() {
       const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       const dt_raw = dist_nm / (50 * motorSpeed);
       const dt = Math.min(6, Math.max(0.25, Math.round(dt_raw / 0.25) * 0.25));
-      setParams(p => ({ ...p, dt }));
+      const seuil_nm = Math.max(5, Math.round(dist_nm / 20));
+      setParams(p => ({ ...p, dt, seuil_nm }));
       return;
     }
     if (!polaire) return;
@@ -373,6 +374,8 @@ export default function App() {
     const Δλ = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const seuil_nm = Math.max(5, Math.round(dist_nm / 20));
+    setParams(p => ({ ...p, seuil_nm }));
     fetch(`${API}/polaires/${encodeURIComponent(polaire)}/stats`)
       .then(r => r.json())
       .then(({ v_mean }) => {
@@ -385,25 +388,6 @@ export default function App() {
   }, [depPoint, arrPoint, polaire, propulsionMode, motorSpeed]);
 
   // ── Handlers ──────────────────────────────────────────────────────────
-  const saveRoute = () => {
-    if (!routeResult) return;
-    const id = Date.now();
-    setSavedRoutes(r => [...r, {
-      id,
-      name: `Route ${routeCounter}`,
-      routeResult,
-      depPoint,
-      arrPoint,
-      routeDepAbsH,
-      color: SAVED_ROUTE_COLORS[savedRoutes.length % SAVED_ROUTE_COLORS.length],
-    }]);
-    setSavedIsoVisible(p => ({ ...p, [id]: true }));
-    setRouteCounter(c => c + 1);
-    setActiveRouteIds(prev => new Set([...prev, id]));
-    setSelectedRouteId(id);
-    setShowCurrentRoute(false);
-  };
-
   const toggleSavedRoute = (id) => {
     setActiveRouteIds(prev => {
       const next = new Set(prev);
@@ -431,6 +415,8 @@ export default function App() {
     if (!depPoint || !arrPoint) return;
     if (propulsionMode === 'voile' && !polaire) return;
     if (windMode === 'grib' && !file) return;
+    const savedDepPoint = depPoint;
+    const savedArrPoint = arrPoint;
     setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0); setShowCurrentRoute(true);
     const depAbsH = windMode === 'grib' && windRefH !== null
       ? windRefH + (meta?.times?.[depTimeIdx] ?? 0)
@@ -482,6 +468,21 @@ export default function App() {
           } else if (msg.type === 'result') {
             const { type, ...data } = msg;
             setRouteResult(data);
+            const id = Date.now();
+            setSavedRoutes(r => [...r, {
+              id,
+              name: `Route ${routeCounter}`,
+              routeResult: data,
+              depPoint: savedDepPoint,
+              arrPoint: savedArrPoint,
+              routeDepAbsH: depAbsH,
+              color: SAVED_ROUTE_COLORS[r.length % SAVED_ROUTE_COLORS.length],
+            }]);
+            setSavedIsoVisible(p => ({ ...p, [id]: true }));
+            setRouteCounter(c => c + 1);
+            setActiveRouteIds(prev => new Set([...prev, id]));
+            setSelectedRouteId(id);
+            setShowCurrentRoute(false);
           } else if (msg.type === 'error') {
             throw new Error(msg.detail);
           }
@@ -1058,16 +1059,6 @@ export default function App() {
                   Calcul : {routeResult.calc_time_s}s
                 </div>
               </div>
-              <button onClick={saveRoute} style={{
-                width: '100%', padding: '7px 0', borderRadius: 7, marginTop: 8,
-                fontSize: 12, fontFamily: FONT, cursor: 'pointer',
-                background: 'rgba(61,220,132,0.12)',
-                color: '#3ddc84',
-                border: '1px solid rgba(61,220,132,0.35)',
-                transition: 'all 0.15s',
-              }}>
-                Sauvegarder la route
-              </button>
             </>
           )}
 

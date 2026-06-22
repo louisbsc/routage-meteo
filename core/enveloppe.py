@@ -249,8 +249,8 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
             while jf in inactive_I_set:
                 chain.append(inactive_lookup[jf])
                 jf += 1
-            if len(chain) > 30:
-                for pt in chain[:-30]:
+            if len(chain) > 100:
+                for pt in chain[:-100]:
                     l[k] = pt
                     k += 1
                 p1 = l[k - 2]
