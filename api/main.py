@@ -17,7 +17,14 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
+from inputs.vents_openmeteo import get_meta as om_get_meta, get_V_deg as om_get_V_deg, get_V_nm as om_get_V_nm  # noqa: E402
 from shapely import contains_xy
+
+# Noms virtuels → model_id Open-Meteo
+OM_FILES = {
+    "openmeteo_ecmwf": "ecmwf_ifs025",
+    "openmeteo_gfs":   "gfs_seamless",
+}
 from inputs.polaires import polaire as load_polaire, polaire_uniforme   # noqa: E402
 from core.isochrone import routage, routage_raffine    # noqa: E402
 from inputs.courants import (  # noqa: E402
@@ -101,11 +108,13 @@ def _get_P(pol_path: str):
 
 @app.get("/files")
 def list_files():
-    return sorted(f.name for f in GRIB_DIR.glob("*.grb2"))
+    return sorted(f.name for f in GRIB_DIR.glob("*.grb2")) + list(OM_FILES)
 
 
 @app.get("/wind/{filename}/meta")
 def get_meta(filename: str):
+    if filename in OM_FILES:
+        return om_get_meta(OM_FILES[filename])
     if not (GRIB_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     df = _load(filename)
@@ -205,6 +214,26 @@ def uniform_grid(
 
 @app.get("/wind/{filename}/grid")
 def get_wind_grid(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
+    if filename in OM_FILES:
+        V = om_get_V_deg(OM_FILES[filename])
+        lat_start = math.ceil(lat0 / step) * step
+        lon_start = math.ceil(lon0 / step) * step
+        lats = np.arange(lat_start, lat1 + step / 2, step)
+        lons = np.arange(lon_start, lon1 + step / 2, step)
+        if lats.size == 0 or lons.size == 0:
+            return {"data": []}
+        lo, la = np.meshgrid(lons, lats)
+        la_f = la.ravel().astype(float)
+        lo_f = lo.ravel().astype(float)
+        pts  = np.column_stack([lo_f, la_f])
+        wind = V(pts, t)
+        keep = ~contains_xy(land_geom, lo_f, la_f)
+        return {"time_h": float(t), "data": pd.DataFrame({
+            "lat":   np.round(la_f[keep], 4),
+            "lon":   np.round(lo_f[keep], 4),
+            "dir":   np.round(wind[keep, 0], 1),
+            "speed": np.round(wind[keep, 1], 2),
+        }).to_dict(orient="records")}
     if not (GRIB_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     V = _get_V_deg(str(GRIB_DIR / filename))
@@ -499,6 +528,8 @@ def _build_isochrones(L, grib_file=None, break_inactive=False):
 def run_routing(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
+    elif req.grib_file in OM_FILES:
+        V = om_get_V_nm(OM_FILES[req.grib_file])
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
@@ -549,7 +580,8 @@ def run_routing(req: RoutingRequest):
     hours     = (total_min % (24 * 60)) // 60
     minutes   = total_min % 60
 
-    isochrones = _build_isochrones(L, grib_file=req.grib_file, break_inactive=req.route is not None)
+    iso_grib = None if req.grib_file in OM_FILES else req.grib_file
+    isochrones = _build_isochrones(L, grib_file=iso_grib, break_inactive=req.route is not None)
 
     return {
         "route":        route,
@@ -567,6 +599,8 @@ def run_routing(req: RoutingRequest):
 def run_routing_stream(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
+    elif req.grib_file in OM_FILES:
+        V = om_get_V_nm(OM_FILES[req.grib_file])
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
@@ -620,7 +654,8 @@ def run_routing_stream(req: RoutingRequest):
             route_times = time_list[:len(lat)].tolist()
             duration    = float(time_list[-1] - req.t)
             total_min   = int(round(duration * 60))
-            isochrones  = _build_isochrones(L, grib_file=req.grib_file, break_inactive=req.route is not None)
+            iso_grib    = None if req.grib_file in OM_FILES else req.grib_file
+            isochrones  = _build_isochrones(L, grib_file=iso_grib, break_inactive=req.route is not None)
             q.put_nowait({"type": "result",
                 "route": route, "time_list": route_times, "isochrones": isochrones,
                 "duration_h": duration,

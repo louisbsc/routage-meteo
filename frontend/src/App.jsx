@@ -191,7 +191,8 @@ export default function App() {
     };
   }, [viewState]);
 
-  const [windMode, setWindMode]       = useState('grib');  // 'grib' | 'uniform'
+  const [windMode, setWindMode]       = useState('grib');  // 'grib' | 'ecmwf' | 'uniform'
+  const [modelChoice, setModelChoice] = useState('ecmwf'); // modèle API sélectionné
   const [uniformWind, setUniformWind] = useState({ direction: 270, force: 15 });
   const [uniformWindData, setUniformWindData] = useState([]);
 
@@ -259,17 +260,12 @@ export default function App() {
 
   useEffect(() => {
     if (!file) { setMeta(null); setWindData([]); return; }
-    setMeta(null); setWindData([]); setRouteResult(null);
+    setMeta(null); setWindData([]);
     fetch(`${API}/wind/${encodeURIComponent(file)}/meta`)
       .then(r => r.json())
       .then(m => {
         setMeta(m);
         setDepTimeIdx(0);
-        // currentTimeH = heures absolues depuis l'époque Unix
-        const refH = new Date(m.valid_times[0]).getTime() / 3600000;
-        setCurrentTimeH(refH + (m.times[0] ?? 0));
-        const [lon0, lat0, lon1, lat1] = m.bbox;
-        setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
       }).catch(() => {});
   }, [file]);
 
@@ -364,8 +360,8 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentFile, currentMeta, currentTimeH, curRefH, viewport, autoStep]);
 
-  // ── Reset routeResult si paramètres de départ changent ───────────────
-  useEffect(() => { setRouteResult(null); }, [depPoint, arrPoint, depTimeIdx]);
+  // ── Reset routeResult si départ/arrivée changent ─────────────────────
+  useEffect(() => { setRouteResult(null); }, [depPoint, arrPoint]);
 
   // ── Pré-sélection dt ──────────────────────────────────────────────────
   useEffect(() => {
@@ -444,14 +440,15 @@ export default function App() {
   const toggleClick = (mode) =>
     setClickMode(m => m === mode ? null : mode);
 
-  const runRouting = async () => {
+  const runRouting = async (refine = false) => {
     if (!depPoint || !arrPoint) return;
     if (propulsionMode === 'voile' && !polaire) return;
     if (windMode === 'grib' && !file) return;
+    if (windMode === 'ecmwf' && !meta) return;
     const savedDepPoint = depPoint;
     const savedArrPoint = arrPoint;
     setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0); setShowCurrentRoute(true);
-    const depAbsH = windMode === 'grib' && windRefH !== null
+    const depAbsH = (windMode === 'grib' || windMode === 'ecmwf') && windRefH !== null
       ? windRefH + (meta?.times?.[depTimeIdx] ?? 0)
       : currentMode === 'grib' && curRefH !== null
         ? curRefH + (currentMeta?.times?.[depTimeIdx] ?? 0)
@@ -463,11 +460,11 @@ export default function App() {
           ? { polaire_file: polaire, polar_pct: polarPct }
           : { motor_speed: motorSpeed }),
         p_dep: depPoint, p_arr: arrPoint,
-        t: windMode === 'grib'
+        t: (windMode === 'grib' || windMode === 'ecmwf')
           ? (meta?.times?.[depTimeIdx] ?? 0)
           : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
-        ...(routeResult ? { route: routeResult.route } : {}),
+        ...(refine && focusedSaved?.routeResult?.route ? { route: focusedSaved.routeResult.route } : {}),
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
@@ -731,10 +728,13 @@ export default function App() {
             </label>
           </div>
 
-          {/* Toggle GRIB / Uniforme */}
+          {/* Toggle MODELS / GRIB / Uniforme */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-            {['grib', 'uniform'].map(mode => (
-              <button key={mode} onClick={() => setWindMode(mode)}
+            {[['ecmwf', 'MODELS'], ['grib', 'GRIB'], ['uniform', 'Uniforme']].map(([mode, label]) => (
+              <button key={mode} onClick={() => {
+                setWindMode(mode);
+                if (mode === 'ecmwf') setFile(`openmeteo_${modelChoice}`);
+              }}
                 style={{
                   flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
                   fontFamily: FONT, cursor: 'pointer',
@@ -743,18 +743,50 @@ export default function App() {
                   border: `1px solid ${windMode === mode ? '#60a5fa' : 'rgba(100,160,255,0.2)'}`,
                   transition: 'all 0.15s',
                 }}>
-                {mode === 'grib' ? 'GRIB' : 'Uniforme'}
+                {label}
               </button>
             ))}
           </div>
 
-          {windMode === 'grib' ? (
+          {windMode === 'ecmwf' ? (
+            <>
+              {/* Sélecteur de modèle */}
+              {[
+                ['ecmwf', 'ECMWF IFS', 'openmeteo_ecmwf'],
+                ['gfs',   'GFS 0.25°', 'openmeteo_gfs'],
+              ].map(([key, label, virtualFile]) => (
+                <button key={key} onClick={() => {
+                  setModelChoice(key);
+                  setFile(virtualFile);
+                }}
+                  style={{
+                    display: 'block', width: '100%', marginBottom: 5,
+                    padding: '4px 0', borderRadius: 5, fontSize: 10,
+                    fontFamily: FONT, cursor: 'pointer',
+                    background: modelChoice === key ? '#93c5fd' : 'rgba(30,40,80,0.8)',
+                    color: modelChoice === key ? '#080d1a' : '#c8d8ff',
+                    border: `1px solid ${modelChoice === key ? '#93c5fd' : 'rgba(100,160,255,0.2)'}`,
+                    transition: 'all 0.15s',
+                  }}>
+                  {label}
+                </button>
+              ))}
+              {/* Statut */}
+              <div style={{ marginBottom: 10, fontSize: 11, opacity: 0.7, textAlign: 'center', lineHeight: 1.5 }}>
+                {windLoading
+                  ? `⏳ Téléchargement ${modelChoice === 'gfs' ? 'GFS' : 'ECMWF'}… (~20s)`
+                  : meta
+                  ? `✓ ${meta.model} — pas ${meta.times.length > 1 ? meta.times[1] - meta.times[0] : '?'}h (${meta.days}j)`
+                  : 'Sélectionner un modèle'}
+              </div>
+            </>
+          ) : windMode === 'grib' ? (
             <>
               <label style={labelStyle}>Fichier</label>
               <select value={file} onChange={e => setFile(e.target.value)}
                 style={{ ...inputStyle, marginBottom: 12 }}>
                 <option value="">— Choisir un fichier —</option>
-                {files.map(f => <option key={f} value={f}>{f}</option>)}
+                {files.filter(f => !f.startsWith('openmeteo_')).map(f => <option key={f} value={f}>{f}</option>)}
               </select>
               {windLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
             </>
@@ -973,28 +1005,37 @@ export default function App() {
             </div>
           )}
 
-          {/* Bouton lancer / raffiner */}
-          <button onClick={runRouting} disabled={!canRoute}
-            style={{
-              width: '100%', padding: '9px 0', borderRadius: 8,
-              fontSize: 13, fontWeight: 'bold', fontFamily: FONT,
-              cursor: canRoute ? 'pointer' : 'not-allowed',
-              background: canRoute
-                ? (routeResult && !routing
+          {/* Boutons lancer / raffiner */}
+          <div style={{ display: 'flex', gap: 6, marginTop: 2, marginBottom: routing ? 6 : (routeResult || routeError) ? 10 : 0 }}>
+            {focusedSaved && (
+              <button onClick={() => runRouting(true)} disabled={!canRoute || routing}
+                style={{
+                  flex: 1, padding: '9px 0', borderRadius: 8,
+                  fontSize: 12, fontWeight: 'bold', fontFamily: FONT,
+                  cursor: (canRoute && !routing) ? 'pointer' : 'not-allowed',
+                  background: (canRoute && !routing)
                     ? 'linear-gradient(135deg, #0d6b3a, #1daa5e)'
-                    : 'linear-gradient(135deg, #1455a4, #1e90d8)')
-                : 'rgba(30,40,80,0.4)',
-              color: canRoute ? 'white' : 'rgba(200,216,255,0.25)',
-              border: 'none',
-              marginTop: 2,
-              marginBottom: routing ? 6 : (routeResult || routeError) ? 10 : 0,
-            }}>
-            {routing
-              ? 'Calcul en cours…'
-              : routeResult
-                ? 'Raffiner la route'
-                : 'Lancer le routage'}
-          </button>
+                    : 'rgba(30,40,80,0.4)',
+                  color: (canRoute && !routing) ? 'white' : 'rgba(200,216,255,0.25)',
+                  border: 'none',
+                }}>
+                Raffiner
+              </button>
+            )}
+            <button onClick={() => runRouting(false)} disabled={!canRoute || routing}
+              style={{
+                flex: 1, padding: '9px 0', borderRadius: 8,
+                fontSize: 12, fontWeight: 'bold', fontFamily: FONT,
+                cursor: (canRoute && !routing) ? 'pointer' : 'not-allowed',
+                background: (canRoute && !routing)
+                  ? 'linear-gradient(135deg, #1455a4, #1e90d8)'
+                  : 'rgba(30,40,80,0.4)',
+                color: (canRoute && !routing) ? 'white' : 'rgba(200,216,255,0.25)',
+                border: 'none',
+              }}>
+              {routing ? 'Calcul…' : 'Lancer'}
+            </button>
+          </div>
 
           {/* Barre de progression */}
           {routing && (
@@ -1059,21 +1100,6 @@ export default function App() {
         } : null;
 
         const pct = t => ((t - sliderMin) / sliderRange * 100);
-
-        // Ticks (start + end de chaque bande), dédupliqués si confondus
-        const ticks = [
-          ...(windBand ? [
-            { t: windBand.t0, color: windBand.color },
-            { t: windBand.t1, color: windBand.color },
-          ] : []),
-          ...(curBand ? [
-            { t: curBand.t0, color: curBand.color },
-            { t: curBand.t1, color: curBand.color },
-          ] : []),
-        ].filter((tk, i, arr) =>
-          // Dédoublonner les ticks trop proches (< 0.5 % du slider)
-          arr.findIndex(o => Math.abs(pct(o.t) - pct(tk.t)) < 0.5) === i
-        );
 
         return (
           <div style={{
