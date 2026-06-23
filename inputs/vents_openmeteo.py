@@ -29,13 +29,15 @@ MODELS = {
 URL        = "https://api.open-meteo.com/v1/forecast"
 BBOX       = (-80.0, 20.0, 25.0, 75.0)   # lon0, lat0, lon1, lat1
 RESOLUTION = 5.0
-MAX_LOC    = 10
+MAX_LOC    = 1000   # limite Open-Meteo : jusqu'à 1000 localisations par appel
 CACHE_AGE  = 6                             # heures
+FAIL_COOLDOWN = 120                        # secondes avant de retenter après un échec
 HEADERS    = {"User-Agent": "Mozilla/5.0 (compatible; sailing-router/1.0)"}
 
 # ── Cache interne (clé = model_id) ───────────────────────────────────────────
 
 _cache: dict = {}
+_fail_cache: dict = {}   # model_id → (timestamp, message) du dernier échec
 
 
 # ── Téléchargement ────────────────────────────────────────────────────────────
@@ -136,7 +138,15 @@ def _get_cached(model_id: str):
         meta, iu, iv, fetched = _cache[model_id]
         if (now - fetched).total_seconds() < CACHE_AGE * 3600:
             return meta, iu, iv
-    meta, iu, iv = _download(model_id)
+    fail = _fail_cache.get(model_id)
+    if fail and (now - fail[0]).total_seconds() < FAIL_COOLDOWN:
+        raise RuntimeError(fail[1])
+    try:
+        meta, iu, iv = _download(model_id)
+    except Exception as e:
+        _fail_cache[model_id] = (now, str(e))
+        raise
+    _fail_cache.pop(model_id, None)
     _cache[model_id] = (meta, iu, iv, now)
     return meta, iu, iv
 

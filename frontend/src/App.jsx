@@ -171,6 +171,8 @@ export default function App() {
   const [showGrib, setShowGrib]     = useState(true);
   const [windData, setWindData]     = useState([]);
   const [windLoading, setWindLoading] = useState(false);
+  const [metaLoading, setMetaLoading] = useState(false);
+  const [windError, setWindError]     = useState(null);
   const [viewState, setViewState]   = useState(INIT_VIEW);
 
   // ~15 colonnes de flèches visibles quelle que soit le zoom
@@ -259,14 +261,24 @@ export default function App() {
   }, [viewport]);
 
   useEffect(() => {
-    if (!file) { setMeta(null); setWindData([]); return; }
-    setMeta(null); setWindData([]);
+    if (!file) { setMeta(null); setWindData([]); setWindError(null); return; }
+    setMeta(null); setWindData([]); setWindError(null); setMetaLoading(true);
     fetch(`${API}/wind/${encodeURIComponent(file)}/meta`)
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText);
+        return r.json();
+      })
       .then(m => {
         setMeta(m);
         setDepTimeIdx(0);
-      }).catch(() => {});
+        // currentTimeH = heures absolues depuis l'époque Unix
+        const refH = new Date(m.valid_times[0]).getTime() / 3600000;
+        setCurrentTimeH(refH + (m.times[0] ?? 0));
+        const [lon0, lat0, lon1, lat1] = m.bbox;
+        setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
+      })
+      .catch(e => setWindError(e.message))
+      .finally(() => setMetaLoading(false));
   }, [file]);
 
   // Heures absolues (depuis époque Unix) des références vent et courant
@@ -772,9 +784,14 @@ export default function App() {
                 </button>
               ))}
               {/* Statut */}
-              <div style={{ marginBottom: 10, fontSize: 11, opacity: 0.7, textAlign: 'center', lineHeight: 1.5 }}>
-                {windLoading
+              <div style={{
+                marginBottom: 10, fontSize: 11, opacity: 0.7, textAlign: 'center', lineHeight: 1.5,
+                color: windError ? '#ff8080' : undefined,
+              }}>
+                {metaLoading || windLoading
                   ? `⏳ Téléchargement ${modelChoice === 'gfs' ? 'GFS' : 'ECMWF'}… (~20s)`
+                  : windError
+                  ? `⚠ ${windError}`
                   : meta
                   ? `✓ ${meta.model} — pas ${meta.times.length > 1 ? meta.times[1] - meta.times[0] : '?'}h (${meta.days}j)`
                   : 'Sélectionner un modèle'}

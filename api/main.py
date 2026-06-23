@@ -106,6 +106,14 @@ def _get_P(pol_path: str):
 
 # ── endpoints vent ──────────────────────────────────────────────────────────
 
+def _om_call(fn, *args):
+    """Appelle une fonction Open-Meteo et convertit les échecs réseau en 503 explicite."""
+    try:
+        return fn(*args)
+    except Exception as e:
+        raise HTTPException(503, f"Open-Meteo indisponible : {e}")
+
+
 @app.get("/files")
 def list_files():
     return sorted(f.name for f in GRIB_DIR.glob("*.grb2")) + list(OM_FILES)
@@ -114,7 +122,7 @@ def list_files():
 @app.get("/wind/{filename}/meta")
 def get_meta(filename: str):
     if filename in OM_FILES:
-        return om_get_meta(OM_FILES[filename])
+        return _om_call(om_get_meta, OM_FILES[filename])
     if not (GRIB_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     df = _load(filename)
@@ -215,7 +223,7 @@ def uniform_grid(
 @app.get("/wind/{filename}/grid")
 def get_wind_grid(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
     if filename in OM_FILES:
-        V = om_get_V_deg(OM_FILES[filename])
+        V = _om_call(om_get_V_deg, OM_FILES[filename])
         lat_start = math.ceil(lat0 / step) * step
         lon_start = math.ceil(lon0 / step) * step
         lats = np.arange(lat_start, lat1 + step / 2, step)
@@ -529,7 +537,7 @@ def run_routing(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
     elif req.grib_file in OM_FILES:
-        V = om_get_V_nm(OM_FILES[req.grib_file])
+        V = _om_call(om_get_V_nm, OM_FILES[req.grib_file])
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
@@ -600,7 +608,7 @@ def run_routing_stream(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
     elif req.grib_file in OM_FILES:
-        V = om_get_V_nm(OM_FILES[req.grib_file])
+        V = _om_call(om_get_V_nm, OM_FILES[req.grib_file])
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
