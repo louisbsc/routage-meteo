@@ -262,6 +262,9 @@ export default function App() {
 
   useEffect(() => {
     if (!file) { setMeta(null); setWindData([]); setWindError(null); return; }
+    // Si un modèle était déjà chargé, on change juste de source : la vue carte
+    // et l'heure du curseur restent inchangées (seul le changement de fichier initial les initialise).
+    const hadMeta = meta !== null;
     setMeta(null); setWindData([]); setWindError(null); setMetaLoading(true);
     fetch(`${API}/wind/${encodeURIComponent(file)}/meta`)
       .then(async r => {
@@ -270,12 +273,25 @@ export default function App() {
       })
       .then(m => {
         setMeta(m);
-        setDepTimeIdx(0);
         // currentTimeH = heures absolues depuis l'époque Unix
         const refH = new Date(m.valid_times[0]).getTime() / 3600000;
-        setCurrentTimeH(refH + (m.times[0] ?? 0));
-        const [lon0, lat0, lon1, lat1] = m.bbox;
-        setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
+        if (!hadMeta) {
+          setDepTimeIdx(0);
+          setCurrentTimeH(refH + (m.times[0] ?? 0));
+          const [lon0, lat0, lon1, lat1] = m.bbox;
+          setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
+        } else {
+          // Recale juste depTimeIdx sur l'heure du curseur déjà en place dans le nouveau modèle
+          setCurrentTimeH(t => {
+            let best = 0, bestDiff = Infinity;
+            m.times.forEach((tm, i) => {
+              const d = Math.abs((refH + tm) - t);
+              if (d < bestDiff) { bestDiff = d; best = i; }
+            });
+            setDepTimeIdx(best);
+            return t;
+          });
+        }
       })
       .catch(e => setWindError(e.message))
       .finally(() => setMetaLoading(false));

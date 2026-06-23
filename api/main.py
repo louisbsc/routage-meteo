@@ -17,13 +17,15 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
-from inputs.vents_openmeteo import get_meta as om_get_meta, get_V_deg as om_get_V_deg, get_V_nm as om_get_V_nm  # noqa: E402
+from inputs.vents_ecmwf import get_meta as ec_get_meta, get_V_deg as ec_get_V_deg, get_V_nm as ec_get_V_nm  # noqa: E402
+from inputs.vents_gfs import get_meta as gfs_get_meta, get_V_deg as gfs_get_V_deg, get_V_nm as gfs_get_V_nm  # noqa: E402
 from shapely import contains_xy
 
-# Noms virtuels → model_id Open-Meteo
-OM_FILES = {
-    "openmeteo_ecmwf": "ecmwf_ifs025",
-    "openmeteo_gfs":   "gfs_seamless",
+# Noms virtuels → (get_meta, get_V_deg, get_V_nm) : vent téléchargé directement
+# depuis l'API officielle du modèle (ECMWF Open Data / NOAA NOMADS), sans fichier GRIB local.
+DIRECT_WIND_MODELS = {
+    "openmeteo_ecmwf": (ec_get_meta, ec_get_V_deg, ec_get_V_nm),
+    "openmeteo_gfs":   (gfs_get_meta, gfs_get_V_deg, gfs_get_V_nm),
 }
 from inputs.polaires import polaire as load_polaire, polaire_uniforme   # noqa: E402
 from core.isochrone import routage, routage_raffine    # noqa: E402
@@ -107,22 +109,22 @@ def _get_P(pol_path: str):
 # ── endpoints vent ──────────────────────────────────────────────────────────
 
 def _om_call(fn, *args):
-    """Appelle une fonction Open-Meteo et convertit les échecs réseau en 503 explicite."""
+    """Appelle une fonction de téléchargement vent et convertit les échecs réseau en 503 explicite."""
     try:
         return fn(*args)
     except Exception as e:
-        raise HTTPException(503, f"Open-Meteo indisponible : {e}")
+        raise HTTPException(503, f"Source de vent indisponible : {e}")
 
 
 @app.get("/files")
 def list_files():
-    return sorted(f.name for f in GRIB_DIR.glob("*.grb2")) + list(OM_FILES)
+    return sorted(f.name for f in GRIB_DIR.glob("*.grb2")) + list(DIRECT_WIND_MODELS)
 
 
 @app.get("/wind/{filename}/meta")
 def get_meta(filename: str):
-    if filename in OM_FILES:
-        return _om_call(om_get_meta, OM_FILES[filename])
+    if filename in DIRECT_WIND_MODELS:
+        return _om_call(DIRECT_WIND_MODELS[filename][0])
     if not (GRIB_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     df = _load(filename)
@@ -222,8 +224,8 @@ def uniform_grid(
 
 @app.get("/wind/{filename}/grid")
 def get_wind_grid(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
-    if filename in OM_FILES:
-        V = _om_call(om_get_V_deg, OM_FILES[filename])
+    if filename in DIRECT_WIND_MODELS:
+        V = _om_call(DIRECT_WIND_MODELS[filename][1])
         lat_start = math.ceil(lat0 / step) * step
         lon_start = math.ceil(lon0 / step) * step
         lats = np.arange(lat_start, lat1 + step / 2, step)
@@ -536,8 +538,8 @@ def _build_isochrones(L, grib_file=None, break_inactive=False):
 def run_routing(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
-    elif req.grib_file in OM_FILES:
-        V = _om_call(om_get_V_nm, OM_FILES[req.grib_file])
+    elif req.grib_file in DIRECT_WIND_MODELS:
+        V = _om_call(DIRECT_WIND_MODELS[req.grib_file][2])
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
@@ -588,7 +590,7 @@ def run_routing(req: RoutingRequest):
     hours     = (total_min % (24 * 60)) // 60
     minutes   = total_min % 60
 
-    iso_grib = None if req.grib_file in OM_FILES else req.grib_file
+    iso_grib = None if req.grib_file in DIRECT_WIND_MODELS else req.grib_file
     isochrones = _build_isochrones(L, grib_file=iso_grib, break_inactive=req.route is not None)
 
     return {
@@ -607,8 +609,8 @@ def run_routing(req: RoutingRequest):
 def run_routing_stream(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
-    elif req.grib_file in OM_FILES:
-        V = _om_call(om_get_V_nm, OM_FILES[req.grib_file])
+    elif req.grib_file in DIRECT_WIND_MODELS:
+        V = _om_call(DIRECT_WIND_MODELS[req.grib_file][2])
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
@@ -662,7 +664,7 @@ def run_routing_stream(req: RoutingRequest):
             route_times = time_list[:len(lat)].tolist()
             duration    = float(time_list[-1] - req.t)
             total_min   = int(round(duration * 60))
-            iso_grib    = None if req.grib_file in OM_FILES else req.grib_file
+            iso_grib    = None if req.grib_file in DIRECT_WIND_MODELS else req.grib_file
             isochrones  = _build_isochrones(L, grib_file=iso_grib, break_inactive=req.route is not None)
             q.put_nowait({"type": "result",
                 "route": route, "time_list": route_times, "isochrones": isochrones,
