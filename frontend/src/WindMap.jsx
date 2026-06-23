@@ -1,9 +1,6 @@
 import DeckGL from '@deck.gl/react';
-import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
-import Map from 'react-map-gl/maplibre';
+import { GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { useMemo } from 'react';
-
-const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json';
 
 const STOPS = [
   [0,  [80,  160, 255, 210]],
@@ -76,9 +73,20 @@ export default function WindMap({
   currentData, showCurrent,
   clickMode, onMapClick,
   extraRoutes = [],
+  landData = null,
 }) {
   const layers = useMemo(() => {
     const result = [];
+
+    // ── Terre (Natural Earth) ─────────────────────────────────────────────
+    if (landData) result.push(new GeoJsonLayer({
+      id: 'land',
+      data: landData,
+      filled: true,
+      stroked: true,
+      getFillColor: [18, 18, 18, 255],
+      stroked: false,
+    }));
 
     // ── Courant ───────────────────────────────────────────────────────────
     if (showCurrent && currentData?.length) result.push(new IconLayer({
@@ -210,7 +218,7 @@ export default function WindMap({
     }
 
     return result;
-  }, [data, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes]);
+  }, [data, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes, landData]);
 
   return (
     <DeckGL
@@ -238,8 +246,8 @@ export default function WindMap({
           },
         }
       }
-    >
-      <Map mapStyle={MAP_STYLE} reuseMaps />
-    </DeckGL>
+      style={{ background: '#3a3a3a' }}
+    />
+
   );
 }

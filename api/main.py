@@ -367,6 +367,21 @@ def get_current_grid_view(filename: str, t: float, lat0: float, lat1: float, lon
     }).to_dict(orient="records")}
 
 
+# ── cartographie terrestre ──────────────────────────────────────────────────
+
+@app.get("/land/geojson")
+def get_land_geojson(lat0: float, lat1: float, lon0: float, lon1: float):
+    from shapely.geometry import box, mapping
+    from shapely.ops import unary_union
+    clip = box(lon0, lat0, lon1, lat1)
+    clipped = land_geom.intersection(clip)
+    if clipped.is_empty:
+        return {"type": "FeatureCollection", "features": []}
+    geoms = list(clipped.geoms) if hasattr(clipped, 'geoms') else [clipped]
+    features = [{"type": "Feature", "geometry": mapping(g), "properties": {}} for g in geoms]
+    return {"type": "FeatureCollection", "features": features}
+
+
 # ── endpoints routage ───────────────────────────────────────────────────────
 
 @app.get("/polaires")

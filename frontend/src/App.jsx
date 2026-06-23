@@ -117,8 +117,8 @@ function PointRow({ label, point, mode, activeMode, onToggle, accentColor, onMan
     onFocus: () => { anyFocused.current = true; },
     onBlur:  () => { anyFocused.current = false; },
   };
-  const is = { ...inputStyle, padding: '4px 6px', fontSize: 12, color: point ? accentColor : 'rgba(200,216,255,0.5)' };
-  const hemStyle = { padding: '3px 7px', borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: FONT, background: 'rgba(30,40,80,0.8)', color: accentColor, border: `1px solid rgba(100,160,255,0.2)` };
+  const is = { ...inputStyle, padding: '3px 4px', fontSize: 13, color: point ? accentColor : 'rgba(200,216,255,0.5)', MozAppearance: 'textfield', WebkitAppearance: 'none' };
+  const hemStyle = { padding: '3px 5px', borderRadius: 4, fontSize: 10, cursor: 'pointer', fontFamily: FONT, background: 'rgba(30,40,80,0.8)', color: accentColor, border: `1px solid rgba(100,160,255,0.2)` };
 
   return (
     <div style={{ marginBottom: 10 }}>
@@ -134,39 +134,28 @@ function PointRow({ label, point, mode, activeMode, onToggle, accentColor, onMan
           {active ? '⊕ cliquer…' : 'Pointer'}
         </button>
       </div>
-      {/* Lat */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginBottom: 4 }}>
-        <span style={{ fontSize: 10, opacity: 0.45, width: 20 }}>Lat</span>
-        <input type="number" min={0} max={90}     step={1}      value={latDeg} placeholder="—"
-          {...fo} style={{ ...is, width: 44 }}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {/* Lat */}
+        <input type="number" min={0} max={90}  step={1} value={latDeg} placeholder="—"
+          {...fo} style={{ ...is, width: 46 }}
           onChange={e => { setLatDeg(e.target.value); trySet(e.target.value, latMin, latHem, lonDeg, lonMin, lonHem); }} />
         <span style={{ fontSize: 11, opacity: 0.35 }}>°</span>
         <input type="number" min={0} max={59.9999} step={0.0001} value={latMin} placeholder="—"
-          {...fo} style={{ ...is, flex: 1 }}
+          {...fo} style={{ ...is, width: 46 }}
           onChange={e => { setLatMin(e.target.value); trySet(latDeg, e.target.value, latHem, lonDeg, lonMin, lonHem); }} />
         <span style={{ fontSize: 11, opacity: 0.35 }}>'</span>
-        <button style={hemStyle} onClick={() => {
-          const h = latHem === 'N' ? 'S' : 'N';
-          setLatHem(h);
-          trySet(latDeg, latMin, h, lonDeg, lonMin, lonHem);
-        }}>{latHem}</button>
-      </div>
-      {/* Lon */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-        <span style={{ fontSize: 10, opacity: 0.45, width: 20 }}>Lon</span>
-        <input type="number" min={0} max={180}    step={1}      value={lonDeg} placeholder="—"
-          {...fo} style={{ ...is, width: 44 }}
+        <button style={hemStyle} onClick={() => { const h = latHem === 'N' ? 'S' : 'N'; setLatHem(h); trySet(latDeg, latMin, h, lonDeg, lonMin, lonHem); }}>{latHem}</button>
+        <span style={{ opacity: 0.2, fontSize: 10 }}>|</span>
+        {/* Lon */}
+        <input type="number" min={0} max={180} step={1} value={lonDeg} placeholder="—"
+          {...fo} style={{ ...is, width: 46 }}
           onChange={e => { setLonDeg(e.target.value); trySet(latDeg, latMin, latHem, e.target.value, lonMin, lonHem); }} />
         <span style={{ fontSize: 11, opacity: 0.35 }}>°</span>
         <input type="number" min={0} max={59.9999} step={0.0001} value={lonMin} placeholder="—"
-          {...fo} style={{ ...is, flex: 1 }}
+          {...fo} style={{ ...is, width: 46 }}
           onChange={e => { setLonMin(e.target.value); trySet(latDeg, latMin, latHem, lonDeg, e.target.value, lonHem); }} />
         <span style={{ fontSize: 11, opacity: 0.35 }}>'</span>
-        <button style={hemStyle} onClick={() => {
-          const h = lonHem === 'E' ? 'W' : 'E';
-          setLonHem(h);
-          trySet(latDeg, latMin, latHem, lonDeg, lonMin, h);
-        }}>{lonHem}</button>
+        <button style={hemStyle} onClick={() => { const h = lonHem === 'E' ? 'W' : 'E'; setLonHem(h); trySet(latDeg, latMin, latHem, lonDeg, lonMin, h); }}>{lonHem}</button>
       </div>
     </div>
   );
@@ -239,6 +228,9 @@ export default function App() {
   });
   const [polarPct, setPolarPct]     = useState(100);
 
+  // Cartographie terrestre
+  const [landData, setLandData] = useState(null);
+
   // Saved routes
   const [savedRoutes, setSavedRoutes] = useState([]);
   const [routeCounter, setRouteCounter] = useState(1);
@@ -252,6 +244,18 @@ export default function App() {
     fetch(`${API}/current-files`).then(r => r.json()).then(setCurrentFiles).catch(() => {});
     fetch(`${API}/polaires`).then(r => r.json()).then(setPolaires).catch(() => {});
   }, []);
+
+  // ── Terre Natural Earth ───────────────────────────────────────────────
+  useEffect(() => {
+    const { lat0, lat1, lon0, lon1 } = viewport;
+    const timer = setTimeout(() => {
+      fetch(`${API}/land/geojson?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}`)
+        .then(r => r.json())
+        .then(setLandData)
+        .catch(() => {});
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [viewport]);
 
   useEffect(() => {
     if (!file) { setMeta(null); setWindData([]); return; }
@@ -406,6 +410,8 @@ export default function App() {
   // ── Navigation clavier du slider de temps ────────────────────────────
   useEffect(() => {
     const handleKey = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'ArrowUp'   || e.key === 'ArrowDown')  e.preventDefault();
       if (e.key === 'ArrowRight') { e.preventDefault(); setCurrentTimeH(t => Math.min(sliderMax, t + 1)); }
       if (e.key === 'ArrowLeft')  { e.preventDefault(); setCurrentTimeH(t => Math.max(sliderMin, t - 1)); }
@@ -676,6 +682,7 @@ export default function App() {
         clickMode={clickMode}
         onMapClick={handleMapClick}
         extraRoutes={extraRoutes}
+        landData={landData}
       />
 
       {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
@@ -1211,16 +1218,6 @@ export default function App() {
         </div>
       )}
 
-      <div style={{
-        position: 'absolute',
-        bottom: (meta || currentMeta) ? 72 : 16,
-        right: 16, zIndex: savedRoutes.length > 0 ? 0 : 10,
-        background: 'rgba(8,13,30,0.7)', borderRadius: 8, padding: '6px 12px',
-        color: 'rgba(150,170,220,0.55)', fontSize: 10, fontFamily: FONT,
-        display: savedRoutes.length > 0 ? 'none' : 'block',
-      }}>
-        Hover pour les valeurs
-      </div>
     </div>
   );
 }
