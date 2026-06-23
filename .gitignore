@@ -1,0 +1,15 @@
+# Données GRIB (fichiers volumineux, locaux)
+data/grib_vent/
+data/grib_courant/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
