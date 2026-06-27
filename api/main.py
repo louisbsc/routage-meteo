@@ -17,15 +17,16 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
-from inputs.vents_ecmwf import get_meta as ec_get_meta, get_V_deg as ec_get_V_deg, get_V_nm as ec_get_V_nm  # noqa: E402
-from inputs.vents_gfs import get_meta as gfs_get_meta, get_V_deg as gfs_get_V_deg, get_V_nm as gfs_get_V_nm  # noqa: E402
+from inputs.wind_fetcher import ecmwf as ecmwf_model, gfs as gfs_model  # noqa: E402
 from shapely import contains_xy
 
-# Noms virtuels → (get_meta, get_V_deg, get_V_nm) : vent téléchargé directement
-# depuis l'API officielle du modèle (ECMWF Open Data / NOAA NOMADS), sans fichier GRIB local.
+# Modèles à téléchargement direct (ECMWF Open Data / NOAA NOMADS).
+# Les anciennes clés "openmeteo_*" sont conservées pour la compatibilité frontend.
 DIRECT_WIND_MODELS = {
-    "openmeteo_ecmwf": (ec_get_meta, ec_get_V_deg, ec_get_V_nm),
-    "openmeteo_gfs":   (gfs_get_meta, gfs_get_V_deg, gfs_get_V_nm),
+    "ecmwf":           ecmwf_model,
+    "gfs":             gfs_model,
+    "openmeteo_ecmwf": ecmwf_model,
+    "openmeteo_gfs":   gfs_model,
 }
 from inputs.polaires import polaire as load_polaire, polaire_uniforme   # noqa: E402
 from core.isochrone import routage, routage_raffine    # noqa: E402
@@ -36,6 +37,8 @@ from inputs.courants import (  # noqa: E402
     courant_uniforme,
 )
 
+from apscheduler.schedulers.background import BackgroundScheduler  # noqa: E402
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -43,6 +46,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_scheduler = BackgroundScheduler(timezone="UTC")
+
+
+@app.on_event("startup")
+def _on_startup():
+    def _boot():
+        # Téléchargements initiaux en parallèle (réduit le temps de démarrage)
+        threads = [
+            threading.Thread(target=ecmwf_model.ensure_fresh, daemon=True),
+            threading.Thread(target=gfs_model.ensure_fresh, daemon=True),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        ecmwf_model.register_jobs(_scheduler)
+        gfs_model.register_jobs(_scheduler)
+        _scheduler.start()
+
+    threading.Thread(target=_boot, daemon=True, name="wind-boot").start()
+
+
+@app.on_event("shutdown")
+def _on_shutdown():
+    if _scheduler.running:
+        _scheduler.shutdown(wait=False)
 
 GRIB_DIR         = ROOT / "data" / "grib_vent"
 GRIB_COURANT_DIR = ROOT / "data" / "grib_courant"
@@ -124,7 +154,7 @@ def list_files():
 @app.get("/wind/{filename}/meta")
 def get_meta(filename: str):
     if filename in DIRECT_WIND_MODELS:
-        return _om_call(DIRECT_WIND_MODELS[filename][0])
+        return _om_call(DIRECT_WIND_MODELS[filename].get_meta)
     if not (GRIB_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     df = _load(filename)
@@ -225,7 +255,7 @@ def uniform_grid(
 @app.get("/wind/{filename}/grid")
 def get_wind_grid(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
     if filename in DIRECT_WIND_MODELS:
-        V = _om_call(DIRECT_WIND_MODELS[filename][1])
+        V = _om_call(DIRECT_WIND_MODELS[filename].get_V_deg)
         lat_start = math.ceil(lat0 / step) * step
         lon_start = math.ceil(lon0 / step) * step
         lats = np.arange(lat_start, lat1 + step / 2, step)
@@ -539,7 +569,7 @@ def run_routing(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
     elif req.grib_file in DIRECT_WIND_MODELS:
-        V = _om_call(DIRECT_WIND_MODELS[req.grib_file][2])
+        V = _om_call(DIRECT_WIND_MODELS[req.grib_file].get_V_nm)
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")
@@ -610,7 +640,7 @@ def run_routing_stream(req: RoutingRequest):
     if req.wind_uniform:
         V = vent_uniforme(req.wind_uniform.direction, req.wind_uniform.force)
     elif req.grib_file in DIRECT_WIND_MODELS:
-        V = _om_call(DIRECT_WIND_MODELS[req.grib_file][2])
+        V = _om_call(DIRECT_WIND_MODELS[req.grib_file].get_V_nm)
     else:
         if not req.grib_file:
             raise HTTPException(400, "grib_file requis si wind_uniform absent")

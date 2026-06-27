@@ -42,9 +42,14 @@ _cache: dict = {}        # "ifs025" → (meta, interp_u, interp_v, fetched_at)
 _fail_cache: dict = {}   # "ifs025" → (timestamp, message)
 
 
-def _forecast_steps():
-    """Échéances publiées par le stream oper IFS HRES : 3h jusqu'à 144h, puis 6h jusqu'à 360h (15j)."""
-    return list(range(0, 145, 3)) + list(range(150, 361, 6))
+def _forecast_steps(run):
+    """Échéances publiées par le stream oper IFS HRES : 3h jusqu'à 144h pour tous les runs,
+    puis 6h jusqu'à 360h (15j) seulement pour les runs principaux 00z/12z — les runs
+    intermédiaires 06z/18z ne sont publiés que sur 6 jours (144h)."""
+    base = list(range(0, 145, 3))
+    if run.hour in (0, 12):
+        base += list(range(150, 361, 6))
+    return base
 
 
 def _latest_run():
@@ -109,7 +114,7 @@ def _fetch_step_uv(session, run, step, lat_idx, lon_idx):
 
 def _download():
     run   = _latest_run()
-    steps = _forecast_steps()
+    steps = _forecast_steps(run)
     lat_idx, lon_idx, lats, lons = _grid_bbox_indices()
 
     u_by_step = {}

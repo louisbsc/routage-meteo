@@ -1,6 +1,7 @@
-# Données GRIB (fichiers volumineux, locaux)
+# Données GRIB et cache météo (fichiers volumineux, locaux)
 data/grib_vent/
 data/grib_courant/
+data/cache/
 
 # Python
 __pycache__/

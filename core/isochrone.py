@@ -138,13 +138,17 @@ def n_iso(N, p_dep, p_arr, t, dt, n, V, P, r, ang, dang, C=None):
 	return np.vstack(L)
 
 def iso_est_arrive(I, p_arr, e_arr):
-	distances = f.distance_np(I, p_arr)
+	actifs = I[I[:, 3] >= 0]
+	if actifs.shape[0] == 0:
+		return False
+	distances = f.distance_np(actifs, p_arr)
 	mask = distances <= e_arr
 	return mask.any()
 
 def point_qui_est_arrive(l, p_arr, e_arr):
-	distances = f.distance_np(l, p_arr)
-	return l[np.argmin(distances)]
+	actifs = l[l[:, 3] >= 0]
+	distances = f.distance_np(actifs, p_arr)
+	return actifs[np.argmin(distances)]
 
 def toutes_iso(p_dep, p_arr, t, dt, n, V, P, e_arr, r, ang, dang, C=None, progress_cb=None):
 	time_list = np.array([t], dtype=int)

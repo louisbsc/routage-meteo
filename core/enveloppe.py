@@ -242,7 +242,7 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
 
         p3 = voisins[idx]
 
-        if p3[3] < 0 and inactive_I_set:
+        if p3[3] < 0 and inactive_I_set and not bouclage(l[:k], p3):
             j = int(-p3[3]) - 1
             chain = [p3]
             jf = j + 1
