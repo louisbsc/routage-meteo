@@ -853,12 +853,7 @@ export default function App() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-                <input type="checkbox" checked={showParticles} onChange={e => setShowParticles(e.target.checked)}
-                  style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
-                Particules
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+<label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
                 <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
                   style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
                 Afficher
@@ -1261,7 +1256,6 @@ export default function App() {
             {/* En-tête */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
               <strong style={{ color: '#4fc3f7', fontSize: 13 }}>{timeLabel}</strong>
-              <span style={{ opacity: 0.4, fontSize: 11 }}>{timeOffset}</span>
             </div>
 
             {/* ── Barre unique : piste colorée + thumb blanc + input invisible ── */}
