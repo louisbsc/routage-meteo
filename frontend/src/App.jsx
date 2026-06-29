@@ -360,7 +360,7 @@ export default function App() {
       setWindData([]); setWindLoading(false); return;
     }
     const { lat0, lat1, lon0, lon1 } = viewport;
-    const cKey = `${file}|${nearestGribIdx}|${lat0.toFixed(1)}|${lat1.toFixed(1)}|${lon0.toFixed(1)}|${lon1.toFixed(1)}|${windStep.toFixed(2)}`;
+    const cKey = `${file}|${Math.round(tWind)}|${lat0.toFixed(1)}|${lat1.toFixed(1)}|${lon0.toFixed(1)}|${lon1.toFixed(1)}|${windStep.toFixed(2)}`;
 
     if (windCache.current.has(cKey)) {
       setWindData(windCache.current.get(cKey));
@@ -806,7 +806,7 @@ export default function App() {
         landData={landData}
       />
 
-      {showParticles && showGrib && (
+      {showParticles && (
         <WindParticles
           data={windMode === 'uniform' ? uniformWindData : windData}
           viewState={viewState}
@@ -853,10 +853,15 @@ export default function App() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
             <div style={{ display: 'flex', gap: 10 }}>
-<label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
                 <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
                   style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
                 Afficher
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showParticles} onChange={e => setShowParticles(e.target.checked)}
+                  style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
+                Particules
               </label>
             </div>
           </div>

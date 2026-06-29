@@ -180,7 +180,7 @@ export function buildSpeedRaster(data, alpha = 185) {
   }
 
   // Upsampling 4× par interpolation bilinéaire : gradient lisse sans extra-requête API
-  const SCALE = Math.min(4, Math.max(1, Math.floor(1024 / Math.max(nLon, nLat))));
+  const SCALE = Math.min(8, Math.max(1, Math.floor(2048 / Math.max(nLon, nLat))));
   const W = nLon * SCALE;
   const H = nLat * SCALE;
 

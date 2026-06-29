@@ -7,13 +7,13 @@ import { useEffect, useRef } from 'react';
 import { buildField, sample, makeProjector, speedColorCss } from './windfield';
 
 // Réglages animation
-const PARTICLE_DENSITY = 1 / 4000;  // particules par pixel²
-const MAX_PARTICLES    = 2500;
-const MAX_AGE          = 110;       // images avant ré-apparition
-const TIME_STEP        = 0.05;      // « heures » de vent simulées par image (à zoom de référence)
+const PARTICLE_DENSITY = 1 / 2000;  // particules par pixel²
+const MAX_PARTICLES    = 5000;
+const MAX_AGE          = 220;       // images avant ré-apparition
+const TIME_STEP        = 0.025;     // « heures » de vent simulées par image (à zoom de référence)
 const REF_WORLD_SIZE   = 512 * Math.pow(2, 5); // zoom 5 = référence vitesse
 const MAX_STEP_PX      = 4;         // déplacement max par image (anti-saut)
-const TRAIL_LENGTH     = 15;        // positions mémorisées par particule
+const TRAIL_LENGTH     = 25;        // positions mémorisées par particule
 const LINE_WIDTH       = 1.15;
 
 
