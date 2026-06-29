@@ -443,7 +443,7 @@ class GFSModel(WindModel):
             key="gfs",
             model_name="NOAA GFS 0.25°",
             n_workers=3,
-            schedule_utc_hours=[5, 11, 17, 23],
+            schedule_utc_hours=[5, 12, 17, 23],
         )
         self._rate_limiter = _RateLimiter(self._MIN_REQUEST_GAP)
 
