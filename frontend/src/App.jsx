@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import WindMap from './WindMap.jsx';
+import WindParticles from './WindParticles.jsx';
 
 const API = 'http://localhost:8000';
 const INIT_VIEW = { longitude: -5, latitude: 47, zoom: 4, pitch: 0, bearing: 0 };
@@ -47,6 +48,13 @@ function computeBoatPosition(routeResult, routeDepAbsH, currentTimeH) {
     }
   }
   return null;
+}
+
+function parseWindResp(resp) {
+  if (Array.isArray(resp.lat)) {
+    return resp.lat.map((lat, i) => ({ lat, lon: resp.lon[i], dir: resp.dir[i], speed: resp.speed[i] }));
+  }
+  return resp.data || [];
 }
 
 const SAVED_ROUTE_COLORS = [
@@ -168,17 +176,24 @@ export default function App() {
   const [file, setFile]             = useState('');
   const [meta, setMeta]             = useState(null);
   const [currentTimeH, setCurrentTimeH] = useState(0);  // heure absolue (offset GRIB)
-  const [showGrib, setShowGrib]     = useState(true);
+  const [showGrib, setShowGrib]         = useState(true);
+  const [showParticles, setShowParticles] = useState(true);
   const [windData, setWindData]     = useState([]);
   const [windLoading, setWindLoading] = useState(false);
   const [metaLoading, setMetaLoading] = useState(false);
   const [windError, setWindError]     = useState(null);
   const [viewState, setViewState]   = useState(INIT_VIEW);
 
-  // ~15 colonnes de flèches visibles quelle que soit le zoom
+  // Flèches courant : ~160 colonnes visibles
   const autoStep = useMemo(() => {
     const lonSpan = (360 / Math.pow(2, viewState.zoom)) * (window.innerWidth / 256);
     return Math.max(0.05, lonSpan / 160);
+  }, [viewState.zoom]);
+
+  // Raster vent : résolution proche du natif modèle (0.25°), ~320 colonnes max
+  const windStep = useMemo(() => {
+    const lonSpan = (360 / Math.pow(2, viewState.zoom)) * (window.innerWidth / 256);
+    return Math.max(0.25, lonSpan / 320);
   }, [viewState.zoom]);
 
   const viewport = useMemo(() => {
@@ -234,12 +249,22 @@ export default function App() {
   // Cartographie terrestre
   const [landData, setLandData] = useState(null);
 
+  // Caches viewport : évite les re-fetch pour le même timestep au même zoom
+  const windCache       = useRef(new Map());
+  const windPrefetching = useRef(new Set());
+  const curCache        = useRef(new Map());
+  const curPrefetching  = useRef(new Set());
+
   // Saved routes
   const [savedRoutes, setSavedRoutes] = useState([]);
   const [routeCounter, setRouteCounter] = useState(1);
   const [activeRouteIds, setActiveRouteIds] = useState(new Set());
   const [selectedRouteId, setSelectedRouteId] = useState(null);
   const [savedIsoVisible, setSavedIsoVisible] = useState({});
+
+  // Vide les caches quand la source change (viewport différent ou nouveau fichier)
+  useEffect(() => { windCache.current.clear(); windPrefetching.current.clear(); }, [file]);
+  useEffect(() => { curCache.current.clear();  curPrefetching.current.clear();  }, [currentFile]);
 
   // ── Init ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -331,22 +356,52 @@ export default function App() {
   useEffect(() => {
     if (!file || !meta || windRefH === null) return;
     const tWind = currentTimeH - windRefH;
-    // Masquer si hors de la plage du GRIB vent
     if (tWind < meta.times[0] || tWind > meta.times[meta.times.length - 1]) {
-      setWindData([]);
-      setWindLoading(false);
+      setWindData([]); setWindLoading(false); return;
+    }
+    const { lat0, lat1, lon0, lon1 } = viewport;
+    const cKey = `${file}|${nearestGribIdx}|${lat0.toFixed(1)}|${lat1.toFixed(1)}|${lon0.toFixed(1)}|${lon1.toFixed(1)}|${windStep.toFixed(2)}`;
+
+    if (windCache.current.has(cKey)) {
+      setWindData(windCache.current.get(cKey));
       return;
     }
+
     setWindLoading(true);
-    const { lat0, lat1, lon0, lon1 } = viewport;
+    const ctrl = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`${API}/wind/${encodeURIComponent(file)}/grid?t=${tWind}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}`)
+      fetch(`${API}/wind/${encodeURIComponent(file)}/grid?t=${tWind}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${windStep}`, { signal: ctrl.signal })
         .then(r => r.json())
-        .then(({ data }) => { setWindData(data); setWindLoading(false); })
+        .then(resp => {
+          const data = parseWindResp(resp);
+          setWindData(data);
+          setWindLoading(false);
+          windCache.current.set(cKey, data);
+          if (windCache.current.size > 40) windCache.current.delete(windCache.current.keys().next().value);
+
+          // Précharge les pas de temps adjacents en arrière-plan
+          setTimeout(() => {
+            [nearestGribIdx - 1, nearestGribIdx + 1, nearestGribIdx - 2, nearestGribIdx + 2].forEach(idx => {
+              if (idx < 0 || idx >= meta.times.length) return;
+              const tPre = meta.times[idx];
+              const pKey = `${file}|${idx}|${lat0.toFixed(1)}|${lat1.toFixed(1)}|${lon0.toFixed(1)}|${lon1.toFixed(1)}|${windStep.toFixed(2)}`;
+              if (windCache.current.has(pKey) || windPrefetching.current.has(pKey)) return;
+              windPrefetching.current.add(pKey);
+              fetch(`${API}/wind/${encodeURIComponent(file)}/grid?t=${tPre}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${windStep}`)
+                .then(r => r.json())
+                .then(r2 => {
+                  windPrefetching.current.delete(pKey);
+                  const d = parseWindResp(r2);
+                  windCache.current.set(pKey, d);
+                  if (windCache.current.size > 40) windCache.current.delete(windCache.current.keys().next().value);
+                }).catch(() => windPrefetching.current.delete(pKey));
+            });
+          }, 200);
+        })
         .catch(() => setWindLoading(false));
     }, 80);
-    return () => clearTimeout(timer);
-  }, [file, meta, currentTimeH, windRefH, viewport, autoStep]);
+    return () => { clearTimeout(timer); ctrl.abort(); };
+  }, [file, meta, currentTimeH, windRefH, viewport, windStep, nearestGribIdx]);
 
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
@@ -371,21 +426,53 @@ export default function App() {
     const tCur = currentTimeH - curRefH;
     const tMin = currentMeta.times[0];
     const tMax = currentMeta.times[currentMeta.times.length - 1];
-    // Masquer si hors de la plage du GRIB courant
     if (tCur < tMin || tCur > tMax) {
-      setCurrentData([]);
-      setCurrentLoading(false);
+      setCurrentData([]); setCurrentLoading(false); return;
+    }
+    const { lat0, lat1, lon0, lon1 } = viewport;
+    // Index le plus proche dans meta courant (pour clé cache stable)
+    let bestCurIdx = 0, bestCurDiff = Infinity;
+    currentMeta.times.forEach((tm, i) => { const d = Math.abs(tm - tCur); if (d < bestCurDiff) { bestCurDiff = d; bestCurIdx = i; } });
+    const cKey = `${currentFile}|${bestCurIdx}|${lat0.toFixed(1)}|${lat1.toFixed(1)}|${lon0.toFixed(1)}|${lon1.toFixed(1)}|${autoStep.toFixed(2)}`;
+
+    if (curCache.current.has(cKey)) {
+      setCurrentData(curCache.current.get(cKey));
       return;
     }
+
     setCurrentLoading(true);
-    const { lat0, lat1, lon0, lon1 } = viewport;
+    const ctrl = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`${API}/current/${encodeURIComponent(currentFile)}/grid?t=${tCur}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}`)
+      fetch(`${API}/current/${encodeURIComponent(currentFile)}/grid?t=${tCur}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}`, { signal: ctrl.signal })
         .then(r => r.json())
-        .then(({ data }) => { setCurrentData(data); setCurrentLoading(false); })
+        .then(resp => {
+          const data = parseWindResp(resp);
+          setCurrentData(data);
+          setCurrentLoading(false);
+          curCache.current.set(cKey, data);
+          if (curCache.current.size > 40) curCache.current.delete(curCache.current.keys().next().value);
+
+          setTimeout(() => {
+            [bestCurIdx - 1, bestCurIdx + 1].forEach(idx => {
+              if (idx < 0 || idx >= currentMeta.times.length) return;
+              const tPre = currentMeta.times[idx];
+              const pKey = `${currentFile}|${idx}|${lat0.toFixed(1)}|${lat1.toFixed(1)}|${lon0.toFixed(1)}|${lon1.toFixed(1)}|${autoStep.toFixed(2)}`;
+              if (curCache.current.has(pKey) || curPrefetching.current.has(pKey)) return;
+              curPrefetching.current.add(pKey);
+              fetch(`${API}/current/${encodeURIComponent(currentFile)}/grid?t=${tPre}&lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}`)
+                .then(r => r.json())
+                .then(r2 => {
+                  curPrefetching.current.delete(pKey);
+                  const d = parseWindResp(r2);
+                  curCache.current.set(pKey, d);
+                  if (curCache.current.size > 40) curCache.current.delete(curCache.current.keys().next().value);
+                }).catch(() => curPrefetching.current.delete(pKey));
+            });
+          }, 200);
+        })
         .catch(() => setCurrentLoading(false));
     }, 80);
-    return () => clearTimeout(timer);
+    return () => { clearTimeout(timer); ctrl.abort(); };
   }, [currentFile, currentMeta, currentTimeH, curRefH, viewport, autoStep]);
 
   // ── Reset routeResult si départ/arrivée changent ─────────────────────
@@ -557,12 +644,12 @@ export default function App() {
   useEffect(() => {
     if (windMode !== 'uniform') { setUniformWindData([]); return; }
     const { lat0, lat1, lon0, lon1 } = viewport;
-    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}&direction=${uniformWind.direction}&force=${uniformWind.force}`;
+    const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${windStep}&direction=${uniformWind.direction}&force=${uniformWind.force}`;
     const timer = setTimeout(() => {
       fetch(url).then(r => r.json()).then(({ data }) => setUniformWindData(data)).catch(() => {});
     }, 120);
     return () => clearTimeout(timer);
-  }, [windMode, viewport, uniformWind, autoStep]);
+  }, [windMode, viewport, uniformWind, windStep]);
 
   // ── Grille courant uniforme ───────────────────────────────────────────
   useEffect(() => {
@@ -684,7 +771,16 @@ export default function App() {
 
   const windT = windRefH !== null ? (currentTimeH - windRefH) : 0;
   const timeOffset = meta
-    ? `T+${windT.toFixed(1)}h  (GRIB: T+${meta.times[nearestGribIdx]}h)`
+    ? (() => {
+        const label = windMode === 'ecmwf' ? 'MODEL' : 'GRIB';
+        const base  = `T+${windT.toFixed(1)}h  (${label}: T+${meta.times[nearestGribIdx]}h)`;
+        if (windMode === 'ecmwf' && meta.run_time) {
+          const d   = new Date(meta.run_time);
+          const run = `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}h`;
+          return `${base}  •  run ${run} UTC`;
+        }
+        return base;
+      })()
     : '';
   const canRoute   = (windMode === 'uniform' || !!file) && !!depPoint && !!arrPoint &&
     (propulsionMode === 'moteur' || !!polaire) && !routing;
@@ -709,6 +805,13 @@ export default function App() {
         extraRoutes={extraRoutes}
         landData={landData}
       />
+
+      {showParticles && showGrib && (
+        <WindParticles
+          data={windMode === 'uniform' ? uniformWindData : windData}
+          viewState={viewState}
+        />
+      )}
 
       {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
       {focusedResult && boatInfo && (
@@ -749,11 +852,18 @@ export default function App() {
         <div style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-              <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
-                style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
-              Afficher
-            </label>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showParticles} onChange={e => setShowParticles(e.target.checked)}
+                  style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
+                Particules
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
+                  style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
+                Afficher
+              </label>
+            </div>
           </div>
 
           {/* Toggle MODELS / GRIB / Uniforme */}
@@ -809,7 +919,14 @@ export default function App() {
                   : windError
                   ? `⚠ ${windError}`
                   : meta
-                  ? `✓ ${meta.model} — pas ${meta.times.length > 1 ? meta.times[1] - meta.times[0] : '?'}h (${meta.days}j)`
+                  ? (<>
+                      {`✓ ${meta.model} — pas ${meta.times.length > 1 ? meta.times[1] - meta.times[0] : '?'}h (${meta.days}j)`}
+                      {meta.run_time && (() => {
+                        const d = new Date(meta.run_time);
+                        const run = `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}h UTC`;
+                        return <span style={{ display: 'block', opacity: 0.6, fontSize: 10 }}>Run : {run}</span>;
+                      })()}
+                    </>)
                   : 'Sélectionner un modèle'}
               </div>
             </>

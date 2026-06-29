@@ -1,28 +1,7 @@
 import DeckGL from '@deck.gl/react';
-import { GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { BitmapLayer, GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { useMemo } from 'react';
-
-const STOPS = [
-  [0,  [80,  160, 255, 210]],
-  [8,  [50,  220, 90,  210]],
-  [16, [255, 220, 0,   220]],
-  [25, [255, 130, 0,   230]],
-  [35, [220, 30,  30,  240]],
-  [50, [140, 0,   0,   255]],
-];
-
-function speedColor(speed) {
-  const s = Math.max(0, speed);
-  for (let i = 1; i < STOPS.length; i++) {
-    const [s0, c0] = STOPS[i - 1];
-    const [s1, c1] = STOPS[i];
-    if (s <= s1) {
-      const f = (s - s0) / (s1 - s0);
-      return c0.map((v, j) => Math.round(v + f * (c1[j] - v)));
-    }
-  }
-  return STOPS[STOPS.length - 1][1];
-}
+import { buildSpeedRaster } from './windfield';
 
 const CURRENT_STOPS = [
   [0,   [190, 225, 255, 170]],
@@ -75,15 +54,23 @@ export default function WindMap({
   extraRoutes = [],
   landData = null,
 }) {
+  const windRaster = useMemo(() => buildSpeedRaster(data), [data]);
+
   const layers = useMemo(() => {
     const result = [];
+
+    // ── Gradient vent (sous la terre pour frontière nette) ────────────────
+    if (showGrib && windRaster) result.push(new BitmapLayer({
+      id: 'wind-raster',
+      image: windRaster.image,
+      bounds: windRaster.bounds,
+    }));
 
     // ── Terre (Natural Earth) ─────────────────────────────────────────────
     if (landData) result.push(new GeoJsonLayer({
       id: 'land',
       data: landData,
       filled: true,
-      stroked: true,
       getFillColor: [18, 18, 18, 255],
       stroked: false,
     }));
@@ -101,21 +88,6 @@ export default function WindMap({
       pickable: true,
       billboard: true,
       updateTriggers: { getColor: currentData, getAngle: currentData, getPosition: currentData },
-    }));
-
-    // ── Vent ──────────────────────────────────────────────────────────────
-    if (showGrib) result.push(new IconLayer({
-      id: 'wind-arrows',
-      data: data.filter(d => d.speed > 0),
-      iconAtlas, iconMapping,
-      getIcon: () => 'arrow',
-      getPosition: d => [d.lon, d.lat, 0],
-      getSize:  d => Math.min(38, 18 + d.speed * 0.35),
-      getAngle: d => -(d.dir + 180),
-      getColor: d => speedColor(d.speed),
-      pickable: true,
-      billboard: true,
-      updateTriggers: { getColor: data, getAngle: data, getPosition: data },
     }));
 
     // ── Isochrones ────────────────────────────────────────────────────────
@@ -218,7 +190,7 @@ export default function WindMap({
     }
 
     return result;
-  }, [data, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes, landData]);
+  }, [windRaster, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes, landData]);
 
   return (
     <DeckGL

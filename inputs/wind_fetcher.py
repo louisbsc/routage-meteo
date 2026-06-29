@@ -33,7 +33,7 @@ from inputs.vents import land_geom
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
-BBOX = (-80.0, 20.0, 25.0, 75.0)   # lon0, lat0, lon1, lat1
+BBOX = (-180.0, -80.0, 179.75, 80.0)  # lon0, lat0, lon1, lat1 (couverture mondiale)
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; sailing-router/1.0)"}
 
 _RETRY_INTERVAL_S = 120    # secondes entre deux tentatives
@@ -89,6 +89,9 @@ class WindModel:
         lons_full = -180.0 + np.arange(1440) * 0.25
         lat_idx = np.where((lats_full >= lat0) & (lats_full <= lat1))[0][::-1]
         lon_idx = np.where((lons_full >= lon0) & (lons_full <= lon1))[0]
+        # Sous-échantillonner à 0.5° pour limiter la taille des fichiers .npz mondiaux
+        lat_idx = lat_idx[::2]
+        lon_idx = lon_idx[::2]
         return lat_idx, lon_idx, lats_full[lat_idx], lons_full[lon_idx]
 
     # ── Orchestration du téléchargement ─────────────────────────────────────
@@ -189,8 +192,8 @@ class WindModel:
         lons = d["lons"].astype(np.float64)
         lats = d["lats"].astype(np.float64)
         times_h = d["times_h"].astype(np.float64)
-        u_grid = d["u_grid"].astype(np.float64)
-        v_grid = d["v_grid"].astype(np.float64)
+        u_grid = d["u_grid"]  # float32 : précision suffisante, réduit la RAM de 2×
+        v_grid = d["v_grid"]
 
         kw = dict(method="linear", bounds_error=False, fill_value=None)
         interp_u = RegularGridInterpolator((lons, lats, times_h), u_grid, **kw)
@@ -235,15 +238,31 @@ class WindModel:
     def ensure_fresh(self):
         """
         Appelé au démarrage du serveur.
-        Si aucun .npz n'existe, lance un téléchargement immédiat (dans le thread appelant).
-        Si un .npz existe déjà, ne fait rien — le planning APScheduler prend le relais.
+        Si aucun .npz n'existe, lance un téléchargement immédiat.
+        Si le BBOX du fichier existant diffère du BBOX configuré (ex. extension mondiale),
+        supprime l'ancien fichier et re-télécharge automatiquement.
         """
         latest = self._find_latest_npz()
         if latest is None:
             logger.info("[%s] aucun cache disque, téléchargement initial...", self.key)
             self._try_fetch_with_retries()
-        else:
-            logger.info("[%s] cache disque trouvé : %s", self.key, latest.name)
+            return
+        # Vérifie que le BBOX stocké correspond au BBOX configuré
+        try:
+            d = np.load(latest, allow_pickle=False)
+            _, _, lats_exp, lons_exp = self._grid_bbox_indices()
+            if (abs(float(d["lons"][0]) - lons_exp[0]) > 2 or
+                    abs(float(d["lons"][-1]) - lons_exp[-1]) > 2 or
+                    abs(float(d["lats"][0]) - lats_exp[0]) > 2 or
+                    abs(float(d["lats"][-1]) - lats_exp[-1]) > 2):
+                logger.info("[%s] BBOX changé, suppression du cache et re-téléchargement…", self.key)
+                latest.unlink(missing_ok=True)
+                self._try_fetch_with_retries()
+                return
+        except Exception:
+            self._try_fetch_with_retries()
+            return
+        logger.info("[%s] cache disque trouvé : %s", self.key, latest.name)
 
     # ── Planning APScheduler ─────────────────────────────────────────────────
 
@@ -435,6 +454,10 @@ class GFSModel(WindModel):
         lats_full = 90.0 - np.arange(721) * 0.25
         lat_idx = np.where((lats_full >= lat0) & (lats_full <= lat1))[0][::-1]
         lon_idx, lons = self._lon_indices_0_360(lon0, lon1)
+        # Sous-échantillonner à 0.5° pour limiter la taille des fichiers .npz mondiaux
+        lat_idx = lat_idx[::2]
+        lon_idx = lon_idx[::2]
+        lons    = lons[::2]
         return lat_idx, lon_idx, lats_full[lat_idx], lons
 
     @staticmethod

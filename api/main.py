@@ -82,6 +82,7 @@ _df_cache:   dict = {}
 _v_cache:    dict = {}
 _vd_cache:   dict = {}
 _grid_cache: dict = {}   # (filename, stride) → (la, lo)
+_sea_mask_cache: dict = {}  # (lat0r,lat1r,lon0r,lon1r,stepr) → (lo_f, la_f, sea)
 _p_cache:    dict = {}
 
 _cd_cache:    dict = {}  # current: filename → DataFrame
@@ -127,6 +128,27 @@ def _get_V(grib_path: str):
     if grib_path not in _v_cache:
         _v_cache[grib_path] = vent_grib_nm(grib_path)
     return _v_cache[grib_path]
+
+
+def _get_sea_grid(lat0: float, lat1: float, lon0: float, lon1: float, step: float):
+    """Grille mer en cache : évite contains_xy répété pour le même viewport+step."""
+    key = (round(lat0, 2), round(lat1, 2), round(lon0, 2), round(lon1, 2), round(step, 3))
+    if key in _sea_mask_cache:
+        return _sea_mask_cache[key]
+    lat_start = math.ceil(lat0 / step) * step
+    lon_start = math.ceil(lon0 / step) * step
+    lats = np.arange(lat_start, lat1 + step / 2, step)
+    lons = np.arange(lon_start, lon1 + step / 2, step)
+    if lats.size == 0 or lons.size == 0:
+        return None
+    lo, la = np.meshgrid(lons, lats)
+    la_f = la.ravel().astype(float)
+    lo_f = lo.ravel().astype(float)
+    sea  = ~contains_xy(land_geom, lo_f, la_f)
+    _sea_mask_cache[key] = (lo_f, la_f, sea)
+    if len(_sea_mask_cache) > 80:
+        del _sea_mask_cache[next(iter(_sea_mask_cache))]
+    return lo_f, la_f, sea
 
 
 def _get_P(pol_path: str):
@@ -255,53 +277,46 @@ def uniform_grid(
 @app.get("/wind/{filename}/grid")
 def get_wind_grid(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
     if filename in DIRECT_WIND_MODELS:
-        V = _om_call(DIRECT_WIND_MODELS[filename].get_V_deg)
-        lat_start = math.ceil(lat0 / step) * step
-        lon_start = math.ceil(lon0 / step) * step
-        lats = np.arange(lat_start, lat1 + step / 2, step)
-        lons = np.arange(lon_start, lon1 + step / 2, step)
-        if lats.size == 0 or lons.size == 0:
-            return {"data": []}
-        lo, la = np.meshgrid(lons, lats)
-        la_f = la.ravel().astype(float)
-        lo_f = lo.ravel().astype(float)
-        pts  = np.column_stack([lo_f, la_f])
-        wind = V(pts, t)
-        keep = ~contains_xy(land_geom, lo_f, la_f)
-        return {"time_h": float(t), "data": pd.DataFrame({
-            "lat":   np.round(la_f[keep], 4),
-            "lon":   np.round(lo_f[keep], 4),
-            "dir":   np.round(wind[keep, 0], 1),
-            "speed": np.round(wind[keep, 1], 2),
-        }).to_dict(orient="records")}
+        model = DIRECT_WIND_MODELS[filename]
+        V     = _om_call(model.get_V_deg)
+        mbbox = _om_call(model.get_meta)["bbox"]
+        clat0 = max(lat0, mbbox[1]);  clat1 = min(lat1, mbbox[3])
+        clon0 = max(lon0, mbbox[0]);  clon1 = min(lon1, mbbox[2])
+        grid = _get_sea_grid(clat0, clat1, clon0, clon1, step)
+        if grid is None:
+            return {"lat": [], "lon": [], "dir": [], "speed": []}
+        lo_f, la_f, sea = grid
+        wind = V(np.column_stack([lo_f[sea], la_f[sea]]), t)
+        return {
+            "time_h": float(t),
+            "lat":   np.round(la_f[sea], 4).tolist(),
+            "lon":   np.round(lo_f[sea], 4).tolist(),
+            "dir":   np.round(wind[:, 0], 1).tolist(),
+            "speed": np.round(wind[:, 1], 2).tolist(),
+        }
     if not (GRIB_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     V = _get_V_deg(str(GRIB_DIR / filename))
-    lat_start = math.ceil(lat0 / step) * step
-    lon_start = math.ceil(lon0 / step) * step
-    lats = np.arange(lat_start, lat1 + step / 2, step)
-    lons = np.arange(lon_start, lon1 + step / 2, step)
-    if lats.size == 0 or lons.size == 0:
-        return {"data": []}
-    lo, la = np.meshgrid(lons, lats)
-    la_f = la.ravel().astype(float)
-    lo_f = lo.ravel().astype(float)
+    grid = _get_sea_grid(lat0, lat1, lon0, lon1, step)
+    if grid is None:
+        return {"lat": [], "lon": [], "dir": [], "speed": []}
+    lo_f, la_f, sea = grid
     df = _load(filename)
     in_bbox = (
         (lo_f >= float(df["longitude"].min())) & (lo_f <= float(df["longitude"].max())) &
         (la_f >= float(df["latitude"].min()))  & (la_f <= float(df["latitude"].max()))
     )
-    if not in_bbox.any():
-        return {"data": []}
-    pts  = np.column_stack([lo_f[in_bbox], la_f[in_bbox]])
-    wind = V(pts, t)
-    keep = ~contains_xy(land_geom, lo_f[in_bbox], la_f[in_bbox])
-    return {"time_h": float(t), "data": pd.DataFrame({
-        "lat":   np.round(la_f[in_bbox][keep], 4),
-        "lon":   np.round(lo_f[in_bbox][keep], 4),
-        "dir":   np.round(wind[keep, 0], 1),
-        "speed": np.round(wind[keep, 1], 2),
-    }).to_dict(orient="records")}
+    keep = in_bbox & sea
+    if not keep.any():
+        return {"lat": [], "lon": [], "dir": [], "speed": []}
+    wind = V(np.column_stack([lo_f[keep], la_f[keep]]), t)
+    return {
+        "time_h": float(t),
+        "lat":   np.round(la_f[keep], 4).tolist(),
+        "lon":   np.round(lo_f[keep], 4).tolist(),
+        "dir":   np.round(wind[:, 0], 1).tolist(),
+        "speed": np.round(wind[:, 1], 2).tolist(),
+    }
 
 
 # ── helpers courant ────────────────────────────────────────────────────────
@@ -408,32 +423,27 @@ def get_current_grid_view(filename: str, t: float, lat0: float, lat1: float, lon
     if not (GRIB_COURANT_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     C = _get_courant(str(GRIB_COURANT_DIR / filename))
-    lat_start = math.ceil(lat0 / step) * step
-    lon_start = math.ceil(lon0 / step) * step
-    lats = np.arange(lat_start, lat1 + step / 2, step)
-    lons = np.arange(lon_start, lon1 + step / 2, step)
-    if lats.size == 0 or lons.size == 0:
-        return {"data": []}
-    lo, la = np.meshgrid(lons, lats)
-    la_f = la.ravel().astype(float)
-    lo_f = lo.ravel().astype(float)
+    grid = _get_sea_grid(lat0, lat1, lon0, lon1, step)
+    if grid is None:
+        return {"lat": [], "lon": [], "dir": [], "speed": []}
+    lo_f, la_f, sea = grid
     df = _load_current(filename)
     in_bbox = (
         (lo_f >= float(df["lon"].min())) & (lo_f <= float(df["lon"].max())) &
         (la_f >= float(df["lat"].min())) & (la_f <= float(df["lat"].max()))
     )
-    if not in_bbox.any():
-        return {"data": []}
-    pts     = np.column_stack([lo_f[in_bbox], la_f[in_bbox]])
-    current = C(pts, t)
-    on_land = contains_xy(land_geom, lo_f[in_bbox], la_f[in_bbox])
-    keep    = ~on_land & (current[:, 1] > 0.01)
-    return {"time_h": float(t), "data": pd.DataFrame({
-        "lat":   np.round(la_f[in_bbox][keep], 4),
-        "lon":   np.round(lo_f[in_bbox][keep], 4),
-        "dir":   np.round(current[keep, 0], 1),
-        "speed": np.round(current[keep, 1], 3),
-    }).to_dict(orient="records")}
+    keep = in_bbox & sea
+    if not keep.any():
+        return {"lat": [], "lon": [], "dir": [], "speed": []}
+    current = C(np.column_stack([lo_f[keep], la_f[keep]]), t)
+    fast    = current[:, 1] > 0.01
+    return {
+        "time_h": float(t),
+        "lat":   np.round(la_f[keep][fast], 4).tolist(),
+        "lon":   np.round(lo_f[keep][fast], 4).tolist(),
+        "dir":   np.round(current[fast, 0], 1).tolist(),
+        "speed": np.round(current[fast, 1], 3).tolist(),
+    }
 
 
 # ── cartographie terrestre ──────────────────────────────────────────────────
