@@ -1,62 +1,117 @@
+import math
+
+import numba
 import numpy as np
 from scipy.spatial import cKDTree
 
 import core.utils as f
 
-# def intersection(A, B, C, D):
-#     """
-#     Vérifie l'intersection entre plusieurs segments.
-    
-#     A, B, C, D : arrays de shape (N, 2) représentant les points des segments
-#     Segment1 = (A[i], B[i])
-#     Segment2 = (C[i], D[i])
-    
-#     Retour : array booléen de longueur N
-#     """
-#     # Vecteurs
-#     AB = B - A  # shape (N,2)
-#     CD = D - C
-#     AC = C - A
-#     AD = D - A
-#     CA = A - C
-#     CB = B - C
-    
-#     # Calcul des produits croisés
-#     def cross(u, v):
-#         return u[:, 0]*v[:, 1] - u[:, 1]*v[:, 0]
-    
-#     o1 = cross(AB, AC)
-#     o2 = cross(AB, AD)
-#     o3 = cross(CD, CA)
-#     o4 = cross(CD, CB)
-    
-#     # Intersection stricte
-#     intersect = (o1*o2 < 0) & (o3*o4 < 0)
-    
-#     # Cas colinéaire
-#     colinear = (o1 == 0) & (((np.minimum(A[:,0], B[:,0]) <= C[:,0]) & (C[:,0] <= np.maximum(A[:,0], B[:,0])) &
-#                              (np.minimum(A[:,1], B[:,1]) <= C[:,1]) & (C[:,1] <= np.maximum(A[:,1], B[:,1])) ) |
-#                             ((np.minimum(A[:,0], B[:,0]) <= D[:,0]) & (D[:,0] <= np.maximum(A[:,0], B[:,0])) &
-#                              (np.minimum(A[:,1], B[:,1]) <= D[:,1]) & (D[:,1] <= np.maximum(A[:,1], B[:,1])) ) )
-    
-#     intersect |= colinear
-#     return intersect
 
-# def intersection(A, B, C, D):
-#     AB = B - A
-#     AC = C - A
-#     AD = D - A
+# ---------------------------------------------------------------------------
+# Fonctions compilées Numba — remplacent les appels numpy dans la boucle
+# chaude de `enveloppe`.  cache=True → compilation sauvegardée sur disque,
+# pas de warmup lors des sessions suivantes.
+# ---------------------------------------------------------------------------
 
-#     CA = A - C
-#     CB = B - C
-#     CD = D - C  # C et D sont constants
+@numba.njit(cache=True)
+def bouclage(l, p, atol=1e-8):
+    """l: (K, ≥2), p: (≥2,) — True si le segment l[-1]→p croise l'enveloppe."""
+    n = l.shape[0]
+    if n < 3:
+        return False
+    px, py = p[0], p[1]
+    for i in range(1, n):
+        if abs(l[i, 0] - px) < atol and abs(l[i, 1] - py) < atol:
+            return True
+    # Segment C→D : dernier point de l vers le candidat p
+    cx, cy = l[n - 1, 0], l[n - 1, 1]
+    dx, dy = px, py
+    min_cx = cx if cx < dx else dx
+    max_cx = cx if cx > dx else dx
+    min_cy = cy if cy < dy else dy
+    max_cy = cy if cy > dy else dy
+    CDx = dx - cx
+    CDy = dy - cy
+    # Test intersection avec chaque segment l[i]→l[i+1] pour i = 0..n-3
+    for i in range(n - 2):
+        ax, ay = l[i, 0], l[i, 1]
+        bx, by = l[i + 1, 0], l[i + 1, 1]
+        # Préfiltre boîte englobante
+        min_ax = ax if ax < bx else bx
+        max_ax = ax if ax > bx else bx
+        min_ay = ay if ay < by else by
+        max_ay = ay if ay > by else by
+        if max_ax < min_cx or min_ax > max_cx or max_ay < min_cy or min_ay > max_cy:
+            continue
+        ABx = bx - ax
+        ABy = by - ay
+        o1 = ABx * (cy - ay) - ABy * (cx - ax)
+        o2 = ABx * (dy - ay) - ABy * (dx - ax)
+        o3 = CDx * (ay - cy) - CDy * (ax - cx)
+        o4 = CDx * (by - cy) - CDy * (bx - cx)
+        if (o1 * o2 < 0) and (o3 * o4 < 0):
+            return True
+    return False
 
-#     o1 = AB[:,0]*AC[:,1] - AB[:,1]*AC[:,0]
-#     o2 = AB[:,0]*AD[:,1] - AB[:,1]*AD[:,0]
-#     o3 = CD[0]*CA[:,1] - CD[1]*CA[:,0]
-#     o4 = CD[0]*CB[:,1] - CD[1]*CB[:,0]
 
-#     return (o1*o2 < 0) & (o3*o4 < 0)
+@numba.njit(cache=True)
+def _angle_positif_batch(a, b, c):
+    """a,b: (≥2,), c: (N, ≥2) → angles orientés positifs (N,).
+
+    Équivalent JIT de angle_oriente_positif quand a et b sont des points 1D
+    et c un tableau 2D de N points.
+    """
+    bax = a[0] - b[0]
+    bay = a[1] - b[1]
+    norm_ba = math.sqrt(bax * bax + bay * bay)
+    n = c.shape[0]
+    out = np.empty(n)
+    for i in range(n):
+        bcx = c[i, 0] - b[0]
+        bcy = c[i, 1] - b[1]
+        norm_bc = math.sqrt(bcx * bcx + bcy * bcy)
+        if norm_ba < 1e-15 or norm_bc < 1e-15:
+            out[i] = 0.0
+            continue
+        dot = bax * bcx + bay * bcy
+        det = bax * bcy - bay * bcx
+        ang = math.atan2(det, dot)
+        if abs(ang) < 1e-10:
+            ang = 0.0
+        if ang < 0.0:
+            ang += 2.0 * math.pi
+        out[i] = ang
+    return out
+
+
+@numba.njit(cache=True)
+def _angle_negatif_scalar(a, b, c):
+    """a,b,c: (≥2,) → angle orienté négatif scalaire.
+
+    Équivalent JIT de angle_oriente_negatif quand tous les arguments sont
+    des points 1D (cas exclusif dans la boucle de enveloppe).
+    """
+    bax = a[0] - b[0]
+    bay = a[1] - b[1]
+    norm_ba = math.sqrt(bax * bax + bay * bay)
+    bcx = c[0] - b[0]
+    bcy = c[1] - b[1]
+    norm_bc = math.sqrt(bcx * bcx + bcy * bcy)
+    if norm_ba < 1e-15 or norm_bc < 1e-15:
+        return 0.0
+    dot = bax * bcx + bay * bcy
+    det = bax * bcy - bay * bcx
+    ang = math.atan2(-det, dot)
+    if abs(ang) < 1e-10:
+        ang = 0.0
+    if ang < 0.0:
+        ang += 2.0 * math.pi
+    return ang
+
+
+# ---------------------------------------------------------------------------
+# Fonctions numpy conservées (rétrocompatibilité / appels hors enveloppe)
+# ---------------------------------------------------------------------------
 
 def intersection(A, B, C, D):
     # préfiltre bbox
@@ -100,59 +155,6 @@ def intersection(A, B, C, D):
     out[mask] = inter2
     return out
 
-# def bouclage(l, p, atol=1e-8):
-#     if len(l) < 3:
-#         return False
-#     l = l[:, :2]
-#     p = p[:2]
-#     if np.any(np.all(np.isclose(l[1:], p, atol=atol), axis=1)):
-#         return True
-#     A = l[:-2]
-#     B = l[1:-1]
-#     C = np.array([l[-1]] * len(A))
-#     D = np.array([p] * len(A))
-#     return intersection(A, B, C, D).any()
-
-# def bouclage(l, p, atol=1e-8):
-#     if len(l) < 3:
-#         return False
-
-#     l = np.asarray(l)[:, :2]   # conversion unique
-#     p = p[:2]
-
-#     if np.any(np.all(np.isclose(l[1:], p, atol=atol), axis=1)):
-#         return True
-
-#     A = l[:-2]
-#     B = l[1:-1]
-
-#     C = np.broadcast_to(l[-1], (len(A), 2))
-#     D = np.broadcast_to(p, (len(A), 2))
-
-#     return intersection(A, B, C, D).any()
-
-def bouclage(l, p, atol=1e-8):
-    if l.shape[0] < 3:
-        return False
-
-    l2 = l[:, :2]
-    p2 = p[:2]
-
-    # remplace np.isclose
-    if np.any(np.all(np.abs(l2[1:] - p2) < atol, axis=1)):
-        return True
-
-    A = l2[:-2]
-    B = l2[1:-1]
-
-    # broadcasting naturel numpy
-
-
-    # n = len(A)
-    # C = np.broadcast_to(l2[-1], (n, 2))
-    # D = np.broadcast_to(p2, (n, 2))
-
-    return intersection(A, B, l2[-1], p2).any()
 
 def distance_points_droite(points, p0, theta):
     points = np.asarray(points, dtype=float)
@@ -189,17 +191,22 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
     tree = cKDTree(N[:, :2])
 
     if I is not None:
-        inactive_lookup = {int(-pt[3]) - 1: pt for pt in N if pt[3] < 0}
-        inactive_I_set  = set(inactive_lookup.keys())
+        mask_inact = N[:, 3] < 0
+        if mask_inact.any():
+            inactive_pts    = N[mask_inact]
+            inactive_lookup = {int(-pt[3]) - 1: pt for pt in inactive_pts}
+            inactive_I_set  = set(inactive_lookup.keys())
+        else:
+            inactive_lookup = {}
+            inactive_I_set  = set()
     else:
         inactive_lookup = {}
         inactive_I_set  = set()
 
     voisins1 = N[tree.query_ball_point(p1[:2], r)]
 
-    #angles1 = np.abs(np.array([f.angleoriente3_np(p, p1, x) for x in voisins1]))
-    angles1 = f.angle_oriente_positif(p, p1, voisins1)
-    
+    angles1 = _angle_positif_batch(p, p1, voisins1)
+
     # gestion cas 2 angles égaux
     max_angle = np.max(angles1)
     eps = 1e-12
@@ -218,18 +225,13 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
     l[1] = p1
     l[2] = p2
     k = 3
-    
-    #l = [p, p1, p2]
 
-    #while not np.array_equal(p2, l[0]): 
-    angle_g = f.angle_oriente_negatif(l[1], p_dep, p_arr)
-    angle_oriente = f.angle_oriente_negatif(l[1], p_dep, l[k-1])
+    angle_g = _angle_negatif_scalar(l[1], p_dep, p_arr)
+    angle_oriente = _angle_negatif_scalar(l[1], p_dep, l[k-1])
     while angle_oriente < angle_g + ang or angle_oriente > 6:
 
-        #voisins = pointsautour_np(p2, P, r)
         voisins = N[tree.query_ball_point(p2[:2], r)]
-        #angles = np.abs(np.array([f.angleoriente3_np(p1, p2, x) for x in voisins]))
-        angles = f.angle_oriente_positif(p1, p2, voisins)
+        angles = _angle_positif_batch(p1, p2, voisins)
 
         # gestion cas 2 angles égaux
         max_angle = np.max(angles)
@@ -255,19 +257,16 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
                     k += 1
                 p1 = l[k - 2]
                 p2 = l[k - 1]
-                angle_oriente = f.angle_oriente_negatif(l[1], p_dep, p2)
+                angle_oriente = _angle_negatif_scalar(l[1], p_dep, p2)
                 continue
 
         if max_angle > np.pi:
 
             while bouclage(l[:k], p3):
-            # while bouclage(np.array(l), p3):
                 mask = np.ones(len(voisins), dtype=bool)
                 mask[idx] = False
                 voisins = voisins[mask]
                 angles = angles[mask]
-                #voisins = np.delete(voisins, idx, axis=0)
-                #angles = np.delete(angles, idx)
                 if voisins.size == 0:
                     raise ValueError(f"Aucun voisin trouvé dans le cercle r.")
 
@@ -285,15 +284,6 @@ def enveloppe(N, r, p_dep, p_arr, ang, delta, I=None):
         l[k] = p3
         k += 1
         p1, p2 = p2, p3
-        angle_oriente = f.angle_oriente_negatif(l[1], p_dep, l[k-1])
+        angle_oriente = _angle_negatif_scalar(l[1], p_dep, l[k-1])
 
     return l[1:k]
-
-
-
-
-
-
-
-
-

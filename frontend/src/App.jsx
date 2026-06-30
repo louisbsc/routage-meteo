@@ -242,7 +242,7 @@ export default function App() {
   const [showCurrentRoute, setShowCurrentRoute] = useState(true);
   const [advOpen, setAdvOpen]       = useState(false);
   const [params, setParams]         = useState({
-    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3, seuil_nm: 20, facteur_raf: 5,
+    dt: 1, n: 100, ang_deg: 90, dang_deg: 0.3, seuil_nm: 20, facteur_raf: 2,
   });
   const [polarPct, setPolarPct]     = useState(100);
 
@@ -492,7 +492,7 @@ export default function App() {
       const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       const dt_raw = dist_nm / (50 * motorSpeed);
       const dt = Math.min(6, Math.max(0.25, Math.round(dt_raw / 0.25) * 0.25));
-      const seuil_nm = Math.max(5, Math.round(dist_nm / 20));
+      const seuil_nm = Math.max(5, Math.round(dist_nm / 10));
       setParams(p => ({ ...p, dt, seuil_nm }));
       return;
     }
@@ -505,7 +505,7 @@ export default function App() {
     const Δλ = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
     const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const seuil_nm = Math.max(5, Math.round(dist_nm / 20));
+    const seuil_nm = Math.max(5, Math.round(dist_nm / 10));
     setParams(p => ({ ...p, seuil_nm }));
     fetch(`${API}/polaires/${encodeURIComponent(polaire)}/stats`)
       .then(r => r.json())
@@ -580,6 +580,10 @@ export default function App() {
           : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
         ...(refine && focusedSaved?.routeResult?.route ? { route: focusedSaved.routeResult.route } : {}),
+        ...(refine ? {
+          facteur_raf: 2 ** ((focusedSaved?.refineDepth ?? 0) + 1),
+          seuil_nm: Math.max(1, params.seuil_nm / (2 ** ((focusedSaved?.refineDepth ?? 0) + 1))),
+        } : {}),
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
@@ -621,6 +625,7 @@ export default function App() {
               depPoint: savedDepPoint,
               arrPoint: savedArrPoint,
               routeDepAbsH: depAbsH,
+              refineDepth: refine ? (focusedSaved?.refineDepth ?? 0) + 1 : 0,
               color: SAVED_ROUTE_COLORS[r.length % SAVED_ROUTE_COLORS.length],
             }]);
             setSavedIsoVisible(p => ({ ...p, [id]: true }));
@@ -1142,8 +1147,8 @@ export default function App() {
                 ['n caps',       'n',        20,   360, 10  ],
                 ['ang init (°)', 'ang_deg',  10,   180, 5   ],
                 ['dang/pas (°)', 'dang_deg', 0,    2,   0.05],
-                ['seuil (NM)',   'seuil_nm',   5,  200, 5   ],
-                ['facteur raf',  'facteur_raf', 1, 20,  1   ],
+                ['seuil (NM)',   'seuil_nm',   5, 5000, 10  ],
+                ['facteur raf',  'facteur_raf', 1,  20,  1  ],
               ].map(([lbl, key, min, max, step]) => (
                 <label key={key} style={{ fontSize: 10, opacity: 0.7, display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {lbl}

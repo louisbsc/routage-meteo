@@ -498,8 +498,8 @@ class RoutingRequest(BaseModel):
     wind_uniform:    Optional[WindUniform] = None
     grib_courant_file: Optional[str] = None
     courant_uniform:   Optional[WindUniform] = None  # même structure direction/force
-    seuil_nm:          float = 20.0
-    facteur_raf:       float = 5.0
+    seuil_nm:          Optional[float] = None   # None → 50 % de la distance départ-arrivée
+    facteur_raf:       float = 2.0
     route:             Optional[List[List[float]]] = None  # [[lon, lat], …] route existante pour raffinement
 
 
@@ -603,11 +603,17 @@ def run_routing(req: RoutingRequest):
         r_arr     = np.array(req.route, dtype=float)
         route_lon = r_arr[:, 0]
         route_lat = r_arr[:, 1]
+        if req.seuil_nm is None:
+            x_dep = p_dep[1] * 60 * 0.7;  y_dep = p_dep[0] * 60
+            x_arr = p_arr[1] * 60 * 0.7;  y_arr = p_arr[0] * 60
+            seuil = 0.5 * math.sqrt((x_arr - x_dep) ** 2 + (y_arr - y_dep) ** 2)
+        else:
+            seuil = req.seuil_nm
         lat, lon, time_list, L = routage_raffine(
             route_lat, route_lon, p_dep, p_arr, req.t,
             dt=req.dt, n=req.n, V=V, P=P,
             ang=math.radians(req.ang_deg),
-            seuil=req.seuil_nm,
+            seuil=seuil,
             facteur_raf=req.facteur_raf,
             C=C,
         )
@@ -681,12 +687,18 @@ def run_routing_stream(req: RoutingRequest):
                 r_arr     = np.array(req.route, dtype=float)
                 route_lon = r_arr[:, 0]
                 route_lat = r_arr[:, 1]
+                if req.seuil_nm is None:
+                    x_dep = p_dep[1] * 60 * 0.7;  y_dep = p_dep[0] * 60
+                    x_arr = p_arr[1] * 60 * 0.7;  y_arr = p_arr[0] * 60
+                    seuil = 0.5 * math.sqrt((x_arr - x_dep) ** 2 + (y_arr - y_dep) ** 2)
+                else:
+                    seuil = req.seuil_nm
                 lat, lon, time_list, L = routage_raffine(
                     route_lat, route_lon, p_dep, p_arr, req.t,
                     dt=req.dt, n=req.n, V=V, P=P,
                     ang=math.radians(req.ang_deg),
-                    seuil=req.seuil_nm,
-            facteur_raf=req.facteur_raf,
+                    seuil=seuil,
+                    facteur_raf=req.facteur_raf,
                     C=C,
                     progress_cb=_progress,
                 )

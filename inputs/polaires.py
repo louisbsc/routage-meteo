@@ -1,6 +1,9 @@
+import math as _math
+
+import numba
+import numpy as np
 import matplotlib.pyplot as plt
 from math import *
-import numpy as np
 
 # POLAIRES THÉORIQUES
 
@@ -63,21 +66,74 @@ def polaire_uniforme(c):
 # POLAIRES RÉELLES
 
 import pandas as pd
-from scipy.interpolate import RegularGridInterpolator
+
+
+@numba.njit(cache=True, parallel=True)
+def _bilinear_interp(xa, xs, v, qa, qs):
+	"""Interpolation bilinéaire compilée — remplace RegularGridInterpolator.
+
+	xa: (Na,) angles grille triés  xs: (Ns,) vitesses grille triées
+	v:  (Na, Ns) vitesses bateau   qa/qs: (N,) requêtes
+	Retourne (N,) — 0 hors bornes (fill_value=0).
+	"""
+	Na  = xa.shape[0]
+	Ns  = xs.shape[0]
+	N   = qa.shape[0]
+	out = np.zeros(N)
+
+	for i in numba.prange(N):
+		a = qa[i]
+		s = qs[i]
+		if a < xa[0] or a > xa[Na - 1] or s < xs[0] or s > xs[Ns - 1]:
+			continue
+
+		# Recherche binaire sur l'angle
+		lo_a, hi_a = 0, Na - 1
+		while lo_a < hi_a - 1:
+			mid = (lo_a + hi_a) >> 1
+			if xa[mid] <= a:
+				lo_a = mid
+			else:
+				hi_a = mid
+		dxa = xa[hi_a] - xa[lo_a]
+		ta  = 0.0 if dxa < 1e-15 else (a - xa[lo_a]) / dxa
+
+		# Recherche binaire sur la vitesse
+		lo_s, hi_s = 0, Ns - 1
+		while lo_s < hi_s - 1:
+			mid = (lo_s + hi_s) >> 1
+			if xs[mid] <= s:
+				lo_s = mid
+			else:
+				hi_s = mid
+		dxs = xs[hi_s] - xs[lo_s]
+		ts  = 0.0 if dxs < 1e-15 else (s - xs[lo_s]) / dxs
+
+		v00 = v[lo_a, lo_s]
+		v10 = v[hi_a, lo_s]
+		v01 = v[lo_a, hi_s]
+		v11 = v[hi_a, hi_s]
+		out[i] = (1.0 - ta) * ((1.0 - ts) * v00 + ts * v01) + \
+		          ta          * ((1.0 - ts) * v10 + ts * v11)
+
+	return out
+
 
 def polaire(path):
-	df = pd.read_csv(path)
-	wind_angles = df.iloc[:, 0].astype(float).values
-	wind_speeds = df.columns[1:].astype(float)
-	boat_speeds = df.iloc[:, 1:].astype(float).values
-	interpolate = RegularGridInterpolator((wind_angles, wind_speeds), boat_speeds, bounds_error=False, fill_value=0)
+	df          = pd.read_csv(path)
+	wind_angles = np.ascontiguousarray(df.iloc[:, 0].astype(float).values)
+	wind_speeds = np.ascontiguousarray(df.columns[1:].astype(float).values)
+	boat_speeds = np.ascontiguousarray(df.iloc[:, 1:].astype(float).values)
+
+	# Warmup JIT à la définition — pas de latence au premier appel routage
+	_bilinear_interp(wind_angles, wind_speeds, boat_speeds,
+	                 np.array([90.0]), np.array([10.0]))
 
 	def polaire_func(ang, f):
-		ang = np.asarray(ang)
-		a = np.abs(ang)
-		f_col = np.full(len(a), f) if np.ndim(f) == 0 else np.asarray(f)
-		pts = np.column_stack((a, f_col))
-		return interpolate(pts)
+		a     = np.abs(np.asarray(ang, dtype=np.float64))
+		f_col = (np.full(len(a), float(f), dtype=np.float64)
+		         if np.ndim(f) == 0 else np.asarray(f, dtype=np.float64))
+		return _bilinear_interp(wind_angles, wind_speeds, boat_speeds, a, f_col)
 
 	polaire_func.v_max = float(boat_speeds.max())
 	return polaire_func

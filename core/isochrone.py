@@ -1,3 +1,6 @@
+import math
+
+import numba
 import numpy as np
 
 import core.utils as f
@@ -19,50 +22,92 @@ import inputs.courants
 # 	liste_index_iso = np.full(n, index_iso + 1, dtype=float)
 # 	liste_index_origine = np.full(n, 0, dtype=float)
 # 	return np.column_stack([dx + x, dy + y, liste_index_iso, liste_index_origine])
-	
-def _polar_offsets_batch(dir_vents, vit_vents, dt, P, n_dense=180):
+
+# Cache des tableaux trigonométriques pour éviter de les recalculer à chaque appel
+_cap_cache: dict = {}
+
+def _polar_offsets_batch(dir_vents, vit_vents, dt, P, n_dense=90):
 	"""Déplacements (dx, dy) pour M points × n_dense caps. Retourne (M, n_dense), (M, n_dense)."""
-	cap_dense = np.linspace(0, 360, n_dense, endpoint=False)
-	cos_cap   = np.cos(np.pi / 2 - np.radians(cap_dense))
-	sin_cap   = np.sin(np.pi / 2 - np.radians(cap_dense))
+	if n_dense not in _cap_cache:
+		cap_dense = np.linspace(0, 360, n_dense, endpoint=False)
+		_cap_cache[n_dense] = (
+			cap_dense,
+			np.cos(np.pi / 2 - np.radians(cap_dense)),
+			np.sin(np.pi / 2 - np.radians(cap_dense)),
+		)
+	cap_dense, cos_cap, sin_cap = _cap_cache[n_dense]
 	ang = (cap_dense[None, :] - dir_vents[:, None] + 180) % 360 - 180  # (M, n_dense)
 	vit = P(ang.ravel(), np.repeat(vit_vents, n_dense)).reshape(len(dir_vents), n_dense)
 	return vit * dt * cos_cap[None, :], vit * dt * sin_cap[None, :]
 
 
+@numba.njit(cache=True, parallel=True)
 def _arc_resample_batch(dx_dense, dy_dense, n):
 	"""Ré-échantillonne M courbes polaires fermées à n points équirépartis en arc.
-	Entrée : (M, n_dense). Retourne all_x, all_y : (M, n)."""
-	M     = dx_dense.shape[0]
-	dx_cl = np.hstack([dx_dense, dx_dense[:, :1]])
-	dy_cl = np.hstack([dy_dense, dy_dense[:, :1]])
-	arc   = np.hstack([np.zeros((M, 1)),
-	                   np.cumsum(np.hypot(np.diff(dx_cl, axis=1),
-	                                      np.diff(dy_cl, axis=1)), axis=1)])
-	n_arc     = arc.shape[1]
-	arc_total = arc[:, -1]
-	t_tgt     = arc_total[:, None] * np.linspace(0, 1, n, endpoint=False)[None, :]
-	scale     = float(arc_total.max()) + 1.0
-	row_off   = np.arange(M, dtype=float) * scale
-	idx_g = np.searchsorted(
-		(arc   + row_off[:, None]).ravel(),
-		(t_tgt + row_off[:, None]).ravel(),
-		side='right',
-	)
-	loc   = np.clip(idx_g - np.repeat(np.arange(M) * n_arc, n), 1, n_arc - 1).reshape(M, n)
-	rows  = np.arange(M)[:, None]
-	t0_   = arc[rows, loc - 1];  t1_ = arc[rows, loc]
-	alpha = (t_tgt - t0_) / np.maximum(t1_ - t0_, 1e-15)
-	all_x = dx_cl[rows, loc - 1] + alpha * (dx_cl[rows, loc] - dx_cl[rows, loc - 1])
-	all_y = dy_cl[rows, loc - 1] + alpha * (dy_cl[rows, loc] - dy_cl[rows, loc - 1])
-	return all_x, all_y  # (M, n)
+
+	Version compilée Numba parallèle : chaque courbe traitée indépendamment
+	sur un cœur distinct via prange.
+	Entrée : (M, n_dense). Retourne all_x, all_y : (M, n).
+	"""
+	M       = dx_dense.shape[0]
+	n_dense = dx_dense.shape[1]
+	all_x   = np.empty((M, n))
+	all_y   = np.empty((M, n))
+
+	for mi in numba.prange(M):
+		arc = np.empty(n_dense + 1)   # alloué par thread via prange
+		# Arc-length parameterization (courbe fermée : dernier → premier)
+		arc[0] = 0.0
+		for j in range(n_dense - 1):
+			ddx = dx_dense[mi, j + 1] - dx_dense[mi, j]
+			ddy = dy_dense[mi, j + 1] - dy_dense[mi, j]
+			arc[j + 1] = arc[j] + math.sqrt(ddx * ddx + ddy * ddy)
+		ddx = dx_dense[mi, 0] - dx_dense[mi, n_dense - 1]
+		ddy = dy_dense[mi, 0] - dy_dense[mi, n_dense - 1]
+		arc[n_dense] = arc[n_dense - 1] + math.sqrt(ddx * ddx + ddy * ddy)
+
+		arc_total = arc[n_dense]
+
+		if arc_total < 1e-15:
+			for k in range(n):
+				all_x[mi, k] = dx_dense[mi, 0]
+				all_y[mi, k] = dy_dense[mi, 0]
+			continue
+
+		# Rééchantillonnage à n points équirépartis en arc
+		for k in range(n):
+			t_k = arc_total * k / n
+			# Recherche binaire : arc[lo] <= t_k < arc[hi]
+			lo, hi = 0, n_dense
+			while lo < hi - 1:
+				mid = (lo + hi) >> 1
+				if arc[mid] <= t_k:
+					lo = mid
+				else:
+					hi = mid
+			# Interpolation linéaire entre lo et hi
+			dt_ = arc[hi] - arc[lo]
+			alpha = 0.0 if dt_ < 1e-15 else (t_k - arc[lo]) / dt_
+			x0 = dx_dense[mi, lo]
+			y0 = dy_dense[mi, lo]
+			# hi == n_dense correspond à la fermeture (retour au point 0)
+			if hi < n_dense:
+				x1 = dx_dense[mi, hi]
+				y1 = dy_dense[mi, hi]
+			else:
+				x1 = dx_dense[mi, 0]
+				y1 = dy_dense[mi, 0]
+			all_x[mi, k] = x0 + alpha * (x1 - x0)
+			all_y[mi, k] = y0 + alpha * (y1 - y0)
+
+	return all_x, all_y
 
 
-def iso_point(p, t, dt, n, V, P, C=None, n_dense=180):
+def iso_point(p, t, dt, n, V, P, C=None, n_dense=90):
 	return nuage_iso(np.array([p]), t, dt, n, V, P, C=C, n_dense=n_dense)
 
 
-def nuage_iso(I, t, dt, n, V, P, C=None, n_dense=180):
+def nuage_iso(I, t, dt, n, V, P, C=None, n_dense=90):
 	active_mask   = I[:, 3] >= 0
 	inactive_mask = ~active_mask
 	parts = []
@@ -204,8 +249,8 @@ def routage(p_dep, p_arr, t, dt, n, V, P, ang, dang, C=None, progress_cb=None):
 
 	return latitude, longitude, time_list, L
 
-def routage_raffine(route_lat, route_lon, p_dep, p_arr, t, dt, n, V, P, ang, seuil=20, facteur_raf = 5, C=None, progress_cb=None):
-	"""Raffinement d'une route existante : vent réduit au corridor, dt/4, dang=0."""
+def routage_raffine(route_lat, route_lon, p_dep, p_arr, t, dt, n, V, P, ang, seuil, facteur_raf, C=None, progress_cb=None):
+	"""Raffinement d'une route existante : vent réduit au corridor, dt/facteur_raf, dang=0."""
 	from inputs.vents import vent_filtre_route
 
 	route_nm = np.column_stack([route_lon * 60 * 0.7, route_lat * 60])
