@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import WindMap from './WindMap.jsx';
-import WindParticles from './WindParticles.jsx';
 
 const API = 'http://localhost:8000';
 const INIT_VIEW = { longitude: -5, latitude: 47, zoom: 4, pitch: 0, bearing: 0 };
@@ -39,7 +38,7 @@ function computeBoatPosition(routeResult, routeDepAbsH, currentTimeH) {
   const base = routeDepAbsH - tl[0];
   const tlAbs = tl.map(t => base + t);
   if (currentTimeH <= tlAbs[0]) return rt[0];
-  if (currentTimeH >= tlAbs[tlAbs.length - 1]) return null;
+  if (currentTimeH >= tlAbs[tlAbs.length - 1]) return rt[rt.length - 1];
   for (let i = 0; i < tlAbs.length - 1; i++) {
     if (currentTimeH >= tlAbs[i] && currentTimeH < tlAbs[i + 1]) {
       const f = (currentTimeH - tlAbs[i]) / (tlAbs[i + 1] - tlAbs[i]);
@@ -801,14 +800,8 @@ export default function App() {
         onMapClick={handleMapClick}
         extraRoutes={extraRoutes}
         landData={landData}
+        showParticles={showParticles}
       />
-
-      {showParticles && (
-        <WindParticles
-          data={windMode === 'uniform' ? uniformWindData : windData}
-          viewState={viewState}
-        />
-      )}
 
       {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
       {focusedResult && boatInfo && (
@@ -849,18 +842,11 @@ export default function App() {
         <div style={card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-                <input type="checkbox" checked={showGrib} onChange={e => setShowGrib(e.target.checked)}
-                  style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
-                Afficher
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-                <input type="checkbox" checked={showParticles} onChange={e => setShowParticles(e.target.checked)}
-                  style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
-                Particules
-              </label>
-            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showGrib} onChange={e => { setShowGrib(e.target.checked); setShowParticles(e.target.checked); }}
+                style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
+              Afficher
+            </label>
           </div>
 
           {/* Toggle MODELS / GRIB / Uniforme */}

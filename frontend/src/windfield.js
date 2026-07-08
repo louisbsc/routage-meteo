@@ -3,15 +3,26 @@
 //  champ de vent interpolé, partagés par le fond coloré et l'animation Windy.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Palette de vitesse de vent (nœuds) — même esprit que Windy.
+// Palette Windy exacte, définie en m/s dans leur source, convertie en nœuds.
+// Séquence : bleu marine → bleu → teal → vert → olive → brun → rose → violet → bleu-ardoise → blanc
 const STOPS = [
-  [0,  [ 70, 140, 235]],
-  [8,  [ 60, 200, 110]],
-  [16, [235, 215,  40]],
-  [25, [240, 130,  25]],
-  [35, [225,  45,  45]],
-  [50, [150,  20, 150]],
-  [70, [120,  20,  90]],
+  [ 0,  [ 98, 113, 183]],  //  0 m/s
+  [ 2,  [ 57,  97, 159]],  //  1 m/s
+  [ 6,  [ 74, 148, 169]],  //  3 m/s
+  [10,  [ 77, 141, 123]],  //  5 m/s
+  [14,  [ 83, 165,  83]],  //  7 m/s
+  [17,  [ 53, 159,  53]],  //  9 m/s
+  [21,  [167, 157,  81]],  // 11 m/s
+  [25,  [159, 127,  58]],  // 13 m/s
+  [29,  [161, 108,  92]],  // 15 m/s
+  [33,  [129,  58,  78]],  // 17 m/s
+  [37,  [175,  80, 136]],  // 19 m/s
+  [41,  [117,  74, 147]],  // 21 m/s
+  [47,  [109,  97, 163]],  // 24 m/s
+  [52,  [ 68, 105, 141]],  // 27 m/s
+  [56,  [ 92, 144, 152]],  // 29 m/s
+  [70,  [125,  68, 165]],  // 36 m/s
+  [89,  [231, 215, 215]],  // 46 m/s (ouragan — blanc)
 ];
 
 function lerpColor(speed) {
@@ -93,7 +104,6 @@ export function buildField(data) {
   const N = nLon * nLat;
   const U = new Float32Array(N);   // composante est (nœuds)
   const V = new Float32Array(N);   // composante nord (nœuds)
-  const SP = new Float32Array(N);  // vitesse (nœuds)
   const M = new Uint8Array(N);     // 1 = donnée présente
 
   for (const d of data) {
@@ -105,16 +115,16 @@ export function buildField(data) {
     const bearing = (d.dir + 180) * D2R;
     U[idx] = d.speed * Math.sin(bearing);
     V[idx] = d.speed * Math.cos(bearing);
-    SP[idx] = d.speed;
     M[idx] = 1;
   }
 
-  return { lon0, lat0, dLon, dLat, nLon, nLat, U, V, SP, M };
+  return { lon0, lat0, dLon, dLat, nLon, nLat, U, V, M };
 }
 
-// Échantillonnage bilinéaire (en ignorant les coins absents près des côtes).
+// Interpolation bilinéaire méthode Windy : U et V interpolés séparément,
+// vitesse dérivée après interpolation (pas interpolée directement).
 export function sample(field, lng, lat) {
-  const { lon0, lat0, dLon, dLat, nLon, nLat, U, V, SP, M } = field;
+  const { lon0, lat0, dLon, dLat, nLon, nLat, U, V, M } = field;
   const fx = (lng - lon0) / dLon;
   const fy = (lat - lat0) / dLat;
   if (fx < -0.5 || fy < -0.5 || fx > nLon - 0.5 || fy > nLat - 0.5) return null;
@@ -131,17 +141,17 @@ export function sample(field, lng, lat) {
     [i0 + 1, j0 + 1, tx * ty],
   ];
 
-  let u = 0, v = 0, sp = 0, w = 0;
+  let u = 0, v = 0, w = 0;
   for (const [i, j, wgt] of corners) {
     const idx = j * nLon + i;
     if (!M[idx]) continue;
     u += U[idx] * wgt;
     v += V[idx] * wgt;
-    sp += SP[idx] * wgt;
     w += wgt;
   }
   if (w < 1e-4) return null;
-  return { u: u / w, v: v / w, speed: sp / w };
+  const ui = u / w, vi = v / w;
+  return { u: ui, v: vi, speed: Math.hypot(ui, vi) };
 }
 
 // ── Fond coloré (raster) : une image lissée positionnée sous la couche terre ─
@@ -151,12 +161,13 @@ export function sample(field, lng, lat) {
 export function buildSpeedRaster(data, alpha = 185) {
   const field = buildField(data);
   if (!field) return null;
-  const { lon0, lat0, dLon, dLat, nLon, nLat, SP, M } = field;
+  const { lon0, lat0, dLon, dLat, nLon, nLat, U, V, M } = field;
   const N = nLon * nLat;
 
-  // BFS : propage les vitesses mer vers les cellules manquantes (terre GRIB)
-  const SP_filled = new Float32Array(SP);
-  const M_filled  = new Uint8Array(M);
+  // BFS : propage U et V depuis la mer vers les cellules manquantes (terre GRIB)
+  const U_filled = new Float32Array(U);
+  const V_filled = new Float32Array(V);
+  const M_filled = new Uint8Array(M);
   const queue = [];
   for (let k = 0; k < N; k++) { if (M[k]) queue.push(k); }
   let qi = 0;
@@ -165,21 +176,22 @@ export function buildSpeedRaster(data, alpha = 185) {
     const j = Math.floor(idx / nLon);
     const i = idx % nLon;
     const nb = [
-      i > 0       ? idx - 1    : -1,
-      i < nLon-1  ? idx + 1    : -1,
-      j > 0       ? idx - nLon : -1,
-      j < nLat-1  ? idx + nLon : -1,
+      i > 0      ? idx - 1    : -1,
+      i < nLon-1 ? idx + 1    : -1,
+      j > 0      ? idx - nLon : -1,
+      j < nLat-1 ? idx + nLon : -1,
     ];
     for (const n of nb) {
       if (n >= 0 && !M_filled[n]) {
-        SP_filled[n] = SP_filled[idx];
-        M_filled[n]  = 1;
+        U_filled[n] = U_filled[idx];
+        V_filled[n] = V_filled[idx];
+        M_filled[n] = 1;
         queue.push(n);
       }
     }
   }
 
-  // Upsampling 4× par interpolation bilinéaire : gradient lisse sans extra-requête API
+  // Upsampling par interpolation bilinéaire : gradient lisse sans extra-requête API
   const SCALE = Math.min(8, Math.max(1, Math.floor(2048 / Math.max(nLon, nLat))));
   const W = nLon * SCALE;
   const H = nLat * SCALE;
@@ -201,10 +213,10 @@ export function buildSpeedRaster(data, alpha = 185) {
 
   for (let r = 0; r < H; r++) {   // r=0 = haut du canvas = Nord
     // Latitude géographique correspondant à cette ligne canvas (via Mercator inverse)
-    const t   = r / (H - 1);
-    const mercY   = mercYmax - t * mercSpan;
-    const lat_r   = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
-    const fy  = (lat_r - lat0) / dLat;
+    const t     = r / (H - 1);
+    const mercY = mercYmax - t * mercSpan;
+    const lat_r = (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * 180 / Math.PI;
+    const fy    = (lat_r - lat0) / dLat;
     if (fy < 0 || fy > nLat - 1) continue;
 
     const j0 = Math.max(0, Math.min(nLat - 2, Math.floor(fy)));
@@ -215,21 +227,30 @@ export function buildSpeedRaster(data, alpha = 185) {
       const i0 = Math.max(0, Math.min(nLon - 2, Math.floor(fx)));
       const tx = fx - i0;
 
-      // Interpolation bilinéaire sur SP_filled (toutes cellules remplies après BFS)
-      const sp =
-        SP_filled[ j0      * nLon +  i0     ] * (1 - tx) * (1 - ty) +
-        SP_filled[ j0      * nLon + (i0 + 1)] *      tx  * (1 - ty) +
-        SP_filled[(j0 + 1) * nLon +  i0     ] * (1 - tx) *      ty  +
-        SP_filled[(j0 + 1) * nLon + (i0 + 1)] *      tx  *      ty;
+      if (!M_filled[j0 * nLon + i0]) continue;
+
+      // Méthode Windy : interpolation bilinéaire de U et V séparément,
+      // puis vitesse calculée depuis les composantes interpolées.
+      const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty);
+      const w01 = (1 - tx) * ty,       w11 = tx * ty;
+      const ui =
+        U_filled[ j0      * nLon +  i0     ] * w00 +
+        U_filled[ j0      * nLon + (i0 + 1)] * w10 +
+        U_filled[(j0 + 1) * nLon +  i0     ] * w01 +
+        U_filled[(j0 + 1) * nLon + (i0 + 1)] * w11;
+      const vi =
+        V_filled[ j0      * nLon +  i0     ] * w00 +
+        V_filled[ j0      * nLon + (i0 + 1)] * w10 +
+        V_filled[(j0 + 1) * nLon +  i0     ] * w01 +
+        V_filled[(j0 + 1) * nLon + (i0 + 1)] * w11;
+      const sp = Math.hypot(ui, vi);
 
       const dst = (r * W + pi) * 4;
-      if (M_filled[j0 * nLon + i0]) {
-        const [rc, g, b] = lerpColor(sp);
-        img.data[dst]     = rc;
-        img.data[dst + 1] = g;
-        img.data[dst + 2] = b;
-        img.data[dst + 3] = alpha;
-      }
+      const [rc, g, b] = lerpColor(sp);
+      img.data[dst]     = rc;
+      img.data[dst + 1] = g;
+      img.data[dst + 2] = b;
+      img.data[dst + 3] = alpha;
     }
   }
   ctx.putImageData(img, 0, 0);

@@ -2,6 +2,7 @@ import DeckGL from '@deck.gl/react';
 import { BitmapLayer, GeoJsonLayer, IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { useMemo } from 'react';
 import { buildSpeedRaster } from './windfield';
+import WindParticles from './WindParticles';
 
 const CURRENT_STOPS = [
   [0,   [190, 225, 255, 170]],
@@ -45,6 +46,8 @@ function buildIconAtlas() {
 const iconAtlas   = buildIconAtlas();
 const iconMapping = { arrow: { x: 0, y: 0, width: 32, height: 32, mask: true } };
 
+const FILL = { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+
 export default function WindMap({
   data, viewState, onViewStateChange,
   depPoint, arrPoint, route, boats = [],
@@ -53,20 +56,24 @@ export default function WindMap({
   clickMode, onMapClick,
   extraRoutes = [],
   landData = null,
+  showParticles = false,
 }) {
   const windRaster = useMemo(() => buildSpeedRaster(data), [data]);
 
-  const layers = useMemo(() => {
-    const result = [];
-
-    // ── Gradient vent (sous la terre pour frontière nette) ────────────────
-    if (showGrib && windRaster) result.push(new BitmapLayer({
+  // Couche du bas : fond couleur + raster vent
+  const rasterLayer = useMemo(() => {
+    if (!showGrib || !windRaster) return [];
+    return [new BitmapLayer({
       id: 'wind-raster',
       image: windRaster.image,
       bounds: windRaster.bounds,
-    }));
+    })];
+  }, [showGrib, windRaster]);
 
-    // ── Terre (Natural Earth) ─────────────────────────────────────────────
+  // Couches du dessus : terre, courant, isochrones, routes, marqueurs, bateaux
+  const topLayers = useMemo(() => {
+    const result = [];
+
     if (landData) result.push(new GeoJsonLayer({
       id: 'land',
       data: landData,
@@ -75,7 +82,6 @@ export default function WindMap({
       stroked: false,
     }));
 
-    // ── Courant ───────────────────────────────────────────────────────────
     if (showCurrent && currentData?.length) result.push(new IconLayer({
       id: 'current-arrows',
       data: currentData.filter(d => d.speed > 0.05),
@@ -90,7 +96,6 @@ export default function WindMap({
       updateTriggers: { getColor: currentData, getAngle: currentData, getPosition: currentData },
     }));
 
-    // ── Isochrones ────────────────────────────────────────────────────────
     if (showIsochrones && isochrones?.length) {
       result.push(new PathLayer({
         id: 'isochrones',
@@ -103,7 +108,6 @@ export default function WindMap({
       }));
     }
 
-    // ── Routes sauvegardées actives ───────────────────────────────────────
     extraRoutes.forEach(saved => {
       if (saved.routeResult?.route?.length) {
         result.push(new PathLayer({
@@ -120,7 +124,6 @@ export default function WindMap({
       }
     });
 
-    // ── Route courante ────────────────────────────────────────────────────
     if (route?.length) {
       result.push(new PathLayer({
         id: 'route-path',
@@ -135,7 +138,6 @@ export default function WindMap({
       }));
     }
 
-    // ── Marqueurs départ / arrivée ────────────────────────────────────────
     const markers = [
       depPoint && { id: 'dep', pos: [depPoint[1], depPoint[0]], fill: [60, 220, 110, 255], label: 'DEP' },
       arrPoint && { id: 'arr', pos: [arrPoint[1], arrPoint[0]], fill: [230, 70,  70,  255], label: 'ARR' },
@@ -172,7 +174,6 @@ export default function WindMap({
       );
     }
 
-    // ── Bateaux ───────────────────────────────────────────────────────────
     if (boats.length) {
       result.push(new ScatterplotLayer({
         id: 'boats',
@@ -190,36 +191,49 @@ export default function WindMap({
     }
 
     return result;
-  }, [windRaster, route, isochrones, showIsochrones, showGrib, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes, landData]);
+  }, [landData, route, isochrones, showIsochrones, currentData, showCurrent, depPoint, arrPoint, boats, extraRoutes]);
 
   return (
-    <DeckGL
-      viewState={viewState}
-      controller={{ dragPan: true, scrollZoom: true, doubleClickZoom: true, keyboard: false }}
-      onViewStateChange={e => onViewStateChange(e.viewState)}
-      layers={layers}
-      onClick={e => {
-        if (onMapClick && e.coordinate) {
-          onMapClick([e.coordinate[1], e.coordinate[0]]); // [lat, lon]
-        }
-      }}
-      getCursor={({ isDragging }) =>
-        clickMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab')
-      }
-      getTooltip={({ object, layer }) =>
-        object && {
-          html: layer?.id === 'current-arrows'
-            ? `<b>${object.speed.toFixed(2)} nœuds</b><br/>Courant : ${object.dir.toFixed(0)}°`
-            : `<b>${object.speed.toFixed(1)} nœuds</b><br/>Vent : ${object.dir.toFixed(0)}°`,
-          style: {
-            background: 'rgba(10,12,28,0.92)', color: '#e0eaff',
-            borderRadius: '6px', fontSize: '12px',
-            padding: '6px 10px', fontFamily: 'monospace',
-          },
-        }
-      }
-      style={{ background: '#3a3a3a' }}
-    />
+    <div style={{ position: 'absolute', inset: 0 }}>
+      {/* Fond + raster vent */}
+      <DeckGL
+        viewState={viewState}
+        controller={false}
+        layers={rasterLayer}
+        style={{ ...FILL, background: '#3a3a3a' }}
+      />
 
+      {/* Particules : entre le raster et la terre/routes/marqueurs */}
+      {showParticles && <WindParticles data={data} viewState={viewState} />}
+
+      {/* Terre, courant, isochrones, routes, marqueurs (capte les événements) */}
+      <DeckGL
+        viewState={viewState}
+        controller={{ dragPan: true, scrollZoom: true, doubleClickZoom: true, keyboard: false }}
+        onViewStateChange={e => onViewStateChange(e.viewState)}
+        layers={topLayers}
+        onClick={e => {
+          if (onMapClick && e.coordinate) {
+            onMapClick([e.coordinate[1], e.coordinate[0]]);
+          }
+        }}
+        getCursor={({ isDragging }) =>
+          clickMode ? 'crosshair' : (isDragging ? 'grabbing' : 'grab')
+        }
+        getTooltip={({ object, layer }) =>
+          object && {
+            html: layer?.id === 'current-arrows'
+              ? `<b>${object.speed.toFixed(2)} nœuds</b><br/>Courant : ${object.dir.toFixed(0)}°`
+              : `<b>${object.speed.toFixed(1)} nœuds</b><br/>Vent : ${object.dir.toFixed(0)}°`,
+            style: {
+              background: 'rgba(10,12,28,0.92)', color: '#e0eaff',
+              borderRadius: '6px', fontSize: '12px',
+              padding: '6px 10px', fontFamily: 'monospace',
+            },
+          }
+        }
+        style={{ ...FILL, background: 'transparent' }}
+      />
+    </div>
   );
 }
