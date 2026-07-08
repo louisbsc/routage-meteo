@@ -273,16 +273,36 @@ export default function App() {
   }, []);
 
   // ── Terre Natural Earth ───────────────────────────────────────────────
+  // Résolution avec hystérésis : seuils d'entrée ≠ seuils de sortie pour
+  // éviter les basculements répétés au voisinage d'un seuil.
+  //   110m  →(zoom≥3)→  50m  →(zoom≥5.5)→  10m
+  //   110m  ←(zoom<2)←  50m  ←(zoom<4.5)←  10m
+  const [landResolution, setLandResolution] = useState(() => {
+    const z = INIT_VIEW.zoom;
+    return z < 3 ? '110m' : z < 5.5 ? '50m' : '10m';
+  });
+
+  useEffect(() => {
+    const z = viewState.zoom;
+    setLandResolution(res => {
+      if (res === '110m' && z >= 3)   return '50m';
+      if (res === '50m'  && z <  2)   return '110m';
+      if (res === '50m'  && z >= 5.5) return '10m';
+      if (res === '10m'  && z <  4.5) return '50m';
+      return res;
+    });
+  }, [viewState.zoom]);
+
   useEffect(() => {
     const { lat0, lat1, lon0, lon1 } = viewport;
     const timer = setTimeout(() => {
-      fetch(`${API}/land/geojson?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}`)
+      fetch(`${API}/land/geojson?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&resolution=${landResolution}`)
         .then(r => r.json())
         .then(setLandData)
         .catch(() => {});
     }, 150);
     return () => clearTimeout(timer);
-  }, [viewport]);
+  }, [viewport, landResolution]);
 
   useEffect(() => {
     if (!file) { setMeta(null); setWindData([]); setWindError(null); return; }

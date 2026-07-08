@@ -94,6 +94,18 @@ reader = shpreader.Reader(land_shp)
 land_geom = unary_union(list(reader.geometries()))
 prepare(land_geom)   # utile pour des tests répétés sur la même géométrie
 
+def _load_land(resolution):
+    shp = shpreader.natural_earth(resolution=resolution, category='physical', name='land')
+    geom = unary_union(list(shpreader.Reader(shp).geometries()))
+    prepare(geom)
+    return geom
+
+land_geoms = {
+    '10m':  land_geom,
+    '50m':  _load_land('50m'),
+    '110m': _load_land('110m'),
+}
+
 
 # renvoie la fonction vent correspondant à un grib dont le chemin est path
 def _build_uv_interpolators(df, x_col, y_col):

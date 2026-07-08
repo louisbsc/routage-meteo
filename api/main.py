@@ -16,7 +16,7 @@ import pandas as pd
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
-from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom  # noqa: E402
+from inputs.vents import table, vent_grib_nm, vent_grib_deg as load_vent_deg, vent_uniforme, land_geom, land_geoms  # noqa: E402
 from inputs.wind_fetcher import ecmwf as ecmwf_model, gfs as gfs_model  # noqa: E402
 from shapely import contains_xy
 
@@ -449,11 +449,11 @@ def get_current_grid_view(filename: str, t: float, lat0: float, lat1: float, lon
 # ── cartographie terrestre ──────────────────────────────────────────────────
 
 @app.get("/land/geojson")
-def get_land_geojson(lat0: float, lat1: float, lon0: float, lon1: float):
+def get_land_geojson(lat0: float, lat1: float, lon0: float, lon1: float, resolution: str = '10m'):
     from shapely.geometry import box, mapping
-    from shapely.ops import unary_union
+    geom = land_geoms.get(resolution, land_geom)
     clip = box(lon0, lat0, lon1, lat1)
-    clipped = land_geom.intersection(clip)
+    clipped = geom.intersection(clip)
     if clipped.is_empty:
         return {"type": "FeatureCollection", "features": []}
     geoms = list(clipped.geoms) if hasattr(clipped, 'geoms') else [clipped]
