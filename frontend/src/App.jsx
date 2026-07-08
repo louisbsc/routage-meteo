@@ -490,8 +490,7 @@ export default function App() {
       const Δλ = (lon2 - lon1) * Math.PI / 180;
       const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
       const dist_nm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      const dt_raw = dist_nm / (50 * motorSpeed);
-      const dt = Math.min(6, Math.max(0.25, Math.round(dt_raw / 0.25) * 0.25));
+      const dt = dist_nm / (30 * motorSpeed);
       const seuil_nm = Math.max(5, Math.round(dist_nm / 10));
       setParams(p => ({ ...p, dt, seuil_nm }));
       return;
@@ -511,8 +510,7 @@ export default function App() {
       .then(r => r.json())
       .then(({ v_mean }) => {
         if (!v_mean) return;
-        const dt_raw = dist_nm / (50 * v_mean);
-        const dt = Math.min(6, Math.max(0.25, Math.round(dt_raw / 0.25) * 0.25));
+        const dt = dist_nm / (30 * v_mean);
         setParams(p => ({ ...p, dt }));
       })
       .catch(() => {});
@@ -555,7 +553,7 @@ export default function App() {
   const toggleClick = (mode) =>
     setClickMode(m => m === mode ? null : mode);
 
-  const runRouting = async (refine = false) => {
+  const runRouting = async () => {
     if (!depPoint || !arrPoint) return;
     if (propulsionMode === 'voile' && !polaire) return;
     if (windMode === 'grib' && !file) return;
@@ -579,11 +577,6 @@ export default function App() {
           ? (meta?.times?.[depTimeIdx] ?? 0)
           : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
-        ...(refine && focusedSaved?.routeResult?.route ? { route: focusedSaved.routeResult.route } : {}),
-        ...(refine ? {
-          facteur_raf: 2 ** ((focusedSaved?.refineDepth ?? 0) + 1),
-          seuil_nm: Math.max(1, params.seuil_nm / (2 ** ((focusedSaved?.refineDepth ?? 0) + 1))),
-        } : {}),
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
           : { grib_file: file }),
@@ -625,7 +618,6 @@ export default function App() {
               depPoint: savedDepPoint,
               arrPoint: savedArrPoint,
               routeDepAbsH: depAbsH,
-              refineDepth: refine ? (focusedSaved?.refineDepth ?? 0) + 1 : 0,
               color: SAVED_ROUTE_COLORS[r.length % SAVED_ROUTE_COLORS.length],
             }]);
             setSavedIsoVisible(p => ({ ...p, [id]: true }));
@@ -1160,24 +1152,9 @@ export default function App() {
             </div>
           )}
 
-          {/* Boutons lancer / raffiner */}
+          {/* Bouton lancer */}
           <div style={{ display: 'flex', gap: 6, marginTop: 2, marginBottom: routing ? 6 : (routeResult || routeError) ? 10 : 0 }}>
-            {focusedSaved && (
-              <button onClick={() => runRouting(true)} disabled={!canRoute || routing}
-                style={{
-                  flex: 1, padding: '9px 0', borderRadius: 8,
-                  fontSize: 12, fontWeight: 'bold', fontFamily: FONT,
-                  cursor: (canRoute && !routing) ? 'pointer' : 'not-allowed',
-                  background: (canRoute && !routing)
-                    ? 'linear-gradient(135deg, #0d6b3a, #1daa5e)'
-                    : 'rgba(30,40,80,0.4)',
-                  color: (canRoute && !routing) ? 'white' : 'rgba(200,216,255,0.25)',
-                  border: 'none',
-                }}>
-                Raffiner
-              </button>
-            )}
-            <button onClick={() => runRouting(false)} disabled={!canRoute || routing}
+            <button onClick={runRouting} disabled={!canRoute || routing}
               style={{
                 flex: 1, padding: '9px 0', borderRadius: 8,
                 fontSize: 12, fontWeight: 'bold', fontFamily: FONT,

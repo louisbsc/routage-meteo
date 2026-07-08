@@ -258,3 +258,41 @@ def routage_raffine(route_lat, route_lon, p_dep, p_arr, t, dt, n, V, P, ang, seu
 
 	return routage(p_dep, p_arr, t, dt / facteur_raf, n, V_red, P, ang, 0, C=C, progress_cb=progress_cb)
 
+def routage_def(p_dep, p_arr, t, dt, n, V, P, ang, dang, seuil, facteur_raf, C=None, progress_cb=None):
+	"""Routage initial suivi de 2 raffinements en cascade, basé sur toutes_iso."""
+	from inputs.vents import vent_filtre_route
+
+	p_dep_i = [p_dep[1] * 60 * 0.7, p_dep[0] * 60, 0, 0]
+	p_arr_i = [p_arr[1] * 60 * 0.7, p_arr[0] * 60]
+
+	# Routage initial
+	e_arr = P.v_max * dt / 2
+	r     = P.v_max * dt * 2 * np.pi / n
+	L0, route, time_list = toutes_iso(
+		p_dep_i, p_arr_i, t, dt, n, V, P, e_arr, r, ang, dang, C=C, progress_cb=progress_cb,
+	)
+
+	# 1er raffinement
+	dt1   = dt / facteur_raf
+	V1    = vent_filtre_route(V, route[:, :2], seuil)
+	e_arr1 = P.v_max * dt1 / 2
+	r1     = P.v_max * dt1 * 2 * np.pi / n
+	_, route, time_list = toutes_iso(
+		p_dep_i, p_arr_i, t, dt1, n, V1, P, e_arr1, r1, ang, 0, C=C, progress_cb=progress_cb,
+	)
+
+	# 2ème raffinement
+	dt2   = dt1 / facteur_raf
+	V2    = vent_filtre_route(V, route[:, :2], seuil)
+	e_arr2 = P.v_max * dt2 / 2
+	r2     = P.v_max * dt2 * 2 * np.pi / n
+	L, route, time_list = toutes_iso(
+		p_dep_i, p_arr_i, t, dt2, n, V2, P, e_arr2, r2, ang, 0, C=C, progress_cb=progress_cb,
+	)
+
+	latitude  = route[:, 1] / 60
+	longitude = route[:, 0] / (60 * 0.7)
+	L0[:, 0], L0[:, 1] = L0[:, 1] / 60, L0[:, 0] / (60 * 0.7)
+
+	return latitude, longitude, time_list, L0
+

@@ -29,7 +29,7 @@ DIRECT_WIND_MODELS = {
     "openmeteo_gfs":   gfs_model,
 }
 from inputs.polaires import polaire as load_polaire, polaire_uniforme   # noqa: E402
-from core.isochrone import routage, routage_raffine    # noqa: E402
+from core.isochrone import routage_def    # noqa: E402
 from inputs.courants import (  # noqa: E402
     table as current_table,
     courant_grib_deg as load_courant_deg,
@@ -500,7 +500,6 @@ class RoutingRequest(BaseModel):
     courant_uniform:   Optional[WindUniform] = None  # même structure direction/force
     seuil_nm:          Optional[float] = None   # None → 50 % de la distance départ-arrivée
     facteur_raf:       float = 2.0
-    route:             Optional[List[List[float]]] = None  # [[lon, lat], …] route existante pour raffinement
 
 
 def _build_polar(req: "RoutingRequest"):
@@ -599,32 +598,21 @@ def run_routing(req: RoutingRequest):
     C = _build_courant(req)
 
     t0 = time.perf_counter()
-    if req.route:
-        r_arr     = np.array(req.route, dtype=float)
-        route_lon = r_arr[:, 0]
-        route_lat = r_arr[:, 1]
-        if req.seuil_nm is None:
-            x_dep = p_dep[1] * 60 * 0.7;  y_dep = p_dep[0] * 60
-            x_arr = p_arr[1] * 60 * 0.7;  y_arr = p_arr[0] * 60
-            seuil = 0.5 * math.sqrt((x_arr - x_dep) ** 2 + (y_arr - y_dep) ** 2)
-        else:
-            seuil = req.seuil_nm
-        lat, lon, time_list, L = routage_raffine(
-            route_lat, route_lon, p_dep, p_arr, req.t,
-            dt=req.dt, n=req.n, V=V, P=P,
-            ang=math.radians(req.ang_deg),
-            seuil=seuil,
-            facteur_raf=req.facteur_raf,
-            C=C,
-        )
+    if req.seuil_nm is None:
+        x_dep = p_dep[1] * 60 * 0.7;  y_dep = p_dep[0] * 60
+        x_arr = p_arr[1] * 60 * 0.7;  y_arr = p_arr[0] * 60
+        seuil = 0.5 * math.sqrt((x_arr - x_dep) ** 2 + (y_arr - y_dep) ** 2)
     else:
-        lat, lon, time_list, L = routage(
-            p_dep, p_arr, req.t,
-            dt=req.dt, n=req.n, V=V, P=P,
-            ang=math.radians(req.ang_deg),
-            dang=math.radians(req.dang_deg),
-            C=C,
-        )
+        seuil = req.seuil_nm
+    lat, lon, time_list, L = routage_def(
+        p_dep, p_arr, req.t,
+        dt=req.dt, n=req.n, V=V, P=P,
+        ang=math.radians(req.ang_deg),
+        dang=math.radians(req.dang_deg),
+        seuil=seuil,
+        facteur_raf=req.facteur_raf,
+        C=C,
+    )
     calc_time_s = round(time.perf_counter() - t0, 2)
 
     route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
@@ -637,7 +625,7 @@ def run_routing(req: RoutingRequest):
     minutes   = total_min % 60
 
     iso_grib = None if req.grib_file in DIRECT_WIND_MODELS else req.grib_file
-    isochrones = _build_isochrones(L, grib_file=iso_grib, break_inactive=req.route is not None)
+    isochrones = _build_isochrones(L, grib_file=iso_grib, break_inactive=False)
 
     return {
         "route":        route,
@@ -683,41 +671,29 @@ def run_routing_stream(req: RoutingRequest):
     def _worker():
         try:
             t0 = time.perf_counter()
-            if req.route:
-                r_arr     = np.array(req.route, dtype=float)
-                route_lon = r_arr[:, 0]
-                route_lat = r_arr[:, 1]
-                if req.seuil_nm is None:
-                    x_dep = p_dep[1] * 60 * 0.7;  y_dep = p_dep[0] * 60
-                    x_arr = p_arr[1] * 60 * 0.7;  y_arr = p_arr[0] * 60
-                    seuil = 0.5 * math.sqrt((x_arr - x_dep) ** 2 + (y_arr - y_dep) ** 2)
-                else:
-                    seuil = req.seuil_nm
-                lat, lon, time_list, L = routage_raffine(
-                    route_lat, route_lon, p_dep, p_arr, req.t,
-                    dt=req.dt, n=req.n, V=V, P=P,
-                    ang=math.radians(req.ang_deg),
-                    seuil=seuil,
-                    facteur_raf=req.facteur_raf,
-                    C=C,
-                    progress_cb=_progress,
-                )
+            if req.seuil_nm is None:
+                x_dep = p_dep[1] * 60 * 0.7;  y_dep = p_dep[0] * 60
+                x_arr = p_arr[1] * 60 * 0.7;  y_arr = p_arr[0] * 60
+                seuil = 0.5 * math.sqrt((x_arr - x_dep) ** 2 + (y_arr - y_dep) ** 2)
             else:
-                lat, lon, time_list, L = routage(
-                    p_dep, p_arr, req.t,
-                    dt=req.dt, n=req.n, V=V, P=P,
-                    ang=math.radians(req.ang_deg),
-                    dang=math.radians(req.dang_deg),
-                    C=C,
-                    progress_cb=_progress,
-                )
+                seuil = req.seuil_nm
+            lat, lon, time_list, L = routage_def(
+                p_dep, p_arr, req.t,
+                dt=req.dt, n=req.n, V=V, P=P,
+                ang=math.radians(req.ang_deg),
+                dang=math.radians(req.dang_deg),
+                seuil=seuil,
+                facteur_raf=req.facteur_raf,
+                C=C,
+                progress_cb=_progress,
+            )
             calc_time_s = round(time.perf_counter() - t0, 2)
             route       = [[float(lo), float(la)] for lo, la in zip(lon.tolist(), lat.tolist())]
             route_times = time_list[:len(lat)].tolist()
             duration    = float(time_list[-1] - req.t)
             total_min   = int(round(duration * 60))
             iso_grib    = None if req.grib_file in DIRECT_WIND_MODELS else req.grib_file
-            isochrones  = _build_isochrones(L, grib_file=iso_grib, break_inactive=req.route is not None)
+            isochrones  = _build_isochrones(L, grib_file=iso_grib, break_inactive=False)
             q.put_nowait({"type": "result",
                 "route": route, "time_list": route_times, "isochrones": isochrones,
                 "duration_h": duration,
