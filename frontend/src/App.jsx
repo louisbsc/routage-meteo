@@ -216,8 +216,7 @@ export default function App() {
     };
   }, [viewState]);
 
-  const [windMode, setWindMode]       = useState('grib');  // 'grib' | 'ecmwf' | 'uniform'
-  const [modelChoice, setModelChoice] = useState('ecmwf'); // modèle API sélectionné
+  const [windMode, setWindMode]       = useState('ecmwf');  // 'grib' | 'ecmwf' | 'uniform'
   const [uniformWind, setUniformWind] = useState({ direction: 270, force: 15 });
   const [uniformWindData, setUniformWindData] = useState([]);
 
@@ -230,8 +229,7 @@ export default function App() {
   const [currentMetaLoading, setCurrentMetaLoading] = useState(false);
   const [currentError, setCurrentError]         = useState(null);
   const [showCurrent, setShowCurrent]           = useState(false);
-  const [currentMode, setCurrentMode]           = useState('grib');  // 'models' | 'grib' | 'uniform'
-  const [currentModelChoice, setCurrentModelChoice] = useState('shom'); // clé dans CURRENT_MODELS
+  const [currentMode, setCurrentMode]           = useState('models');  // 'models' | 'grib' | 'uniform'
   const [uniformCurrent, setUniformCurrent]     = useState({ direction: 180, force: 0.5 });
   const [uniformCurrentData, setUniformCurrentData]     = useState([]);
 
@@ -334,10 +332,16 @@ export default function App() {
         if (!hadMeta) {
           setDepTimeIdx(0);
           setCurrentTimeH(refH + (m.times[0] ?? 0));
-          const [lon0, lat0, lon1, lat1] = m.bbox;
-          setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
+          // Les modèles ECMWF/GFS ont un bbox global (centre ~0,0, golfe de Guinée) :
+          // leur centrage se fait via centerOnEuropeOnce(), pas sur ce bbox.
+          if (!file.startsWith('openmeteo_')) {
+            const [lon0, lat0, lon1, lat1] = m.bbox;
+            setViewState(v => ({ ...v, longitude: (lon0 + lon1) / 2, latitude: (lat0 + lat1) / 2, zoom: 4 }));
+          }
         } else {
-          // Recale juste depTimeIdx sur l'heure du curseur déjà en place dans le nouveau modèle
+          // Recale depTimeIdx sur l'heure du curseur déjà en place ; si cette heure
+          // sort de la fenêtre du nouveau modèle, recale aussi le curseur lui-même
+          // sur la date la plus proche disponible (au lieu de laisser la carte vide).
           setCurrentTimeH(t => {
             let best = 0, bestDiff = Infinity;
             m.times.forEach((tm, i) => {
@@ -345,7 +349,9 @@ export default function App() {
               if (d < bestDiff) { bestDiff = d; best = i; }
             });
             setDepTimeIdx(best);
-            return t;
+            const tMin = refH + m.times[0];
+            const tMax = refH + m.times[m.times.length - 1];
+            return (t < tMin || t > tMax) ? refH + m.times[best] : t;
           });
         }
       })
@@ -437,6 +443,7 @@ export default function App() {
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
     if (!currentFile) { setCurrentMeta(null); setCurrentData([]); setCurrentError(null); return; }
+    const hadCurrentMeta = currentMeta !== null;
     setCurrentMeta(null); setCurrentData([]); setCurrentError(null); setCurrentMetaLoading(true);
     fetch(`${API}/current/${encodeURIComponent(currentFile)}/meta`)
       .then(async r => {
@@ -445,10 +452,24 @@ export default function App() {
       })
       .then(m => {
         setCurrentMeta(m);
-        // N'initialise le slider que si aucun vent n'est chargé
-        if (!meta) {
-          const refH = new Date(m.valid_times[0]).getTime() / 3600000;
+        const refH = new Date(m.valid_times[0]).getTime() / 3600000;
+        if (!hadCurrentMeta && !meta) {
+          // Tout premier chargement, sans vent déjà affiché : initialise au début du modèle
           setCurrentTimeH(refH + (m.times[0] ?? 0));
+        } else {
+          // Si l'heure du curseur sort de la fenêtre du nouveau modèle, recale sur
+          // la date la plus proche disponible (au lieu de laisser la carte vide).
+          setCurrentTimeH(t => {
+            const tMin = refH + m.times[0];
+            const tMax = refH + m.times[m.times.length - 1];
+            if (t >= tMin && t <= tMax) return t;
+            let best = 0, bestDiff = Infinity;
+            m.times.forEach((tm, i) => {
+              const d = Math.abs((refH + tm) - t);
+              if (d < bestDiff) { bestDiff = d; best = i; }
+            });
+            return refH + m.times[best];
+          });
         }
       })
       .catch(e => setCurrentError(e.message))
@@ -587,6 +608,15 @@ export default function App() {
 
   const toggleClick = (mode) =>
     setClickMode(m => m === mode ? null : mode);
+
+  // Ne recentre sur l'Europe qu'à la toute première sélection d'un modèle météo
+  // (vent ou courant) — les sélections suivantes laissent la vue où l'utilisateur l'a mise.
+  const firstModelSelectRef = useRef(true);
+  const centerOnEuropeOnce = () => {
+    if (!firstModelSelectRef.current) return;
+    firstModelSelectRef.current = false;
+    setViewState(v => ({ ...v, longitude: INIT_VIEW.longitude, latitude: INIT_VIEW.latitude, zoom: INIT_VIEW.zoom }));
+  };
 
   const selectWind = () => {
     if (showGrib) { setShowGrib(false); setShowParticles(false); }
@@ -902,7 +932,7 @@ export default function App() {
             {[['ecmwf', 'MODELS'], ['grib', 'GRIB'], ['uniform', 'Uniforme']].map(([mode, label]) => (
               <button key={mode} onClick={() => {
                 setWindMode(mode);
-                if (mode === 'ecmwf') setFile(`openmeteo_${modelChoice}`);
+                if (mode === 'ecmwf') setFile('');
               }}
                 style={{
                   flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
@@ -925,17 +955,16 @@ export default function App() {
                 ['gfs',   'GFS 0.25°', 'openmeteo_gfs'],
               ].map(([key, label, virtualFile]) => (
                 <button key={key} onClick={() => {
-                  setModelChoice(key);
                   setFile(virtualFile);
-                  setViewState(v => ({ ...v, longitude: INIT_VIEW.longitude, latitude: INIT_VIEW.latitude, zoom: INIT_VIEW.zoom }));
+                  centerOnEuropeOnce();
                 }}
                   style={{
                     display: 'block', width: '100%', marginBottom: 5,
                     padding: '4px 0', borderRadius: 5, fontSize: 10,
                     fontFamily: FONT, cursor: 'pointer',
-                    background: modelChoice === key ? '#93c5fd' : 'rgba(30,40,80,0.8)',
-                    color: modelChoice === key ? '#080d1a' : '#c8d8ff',
-                    border: `1px solid ${modelChoice === key ? '#93c5fd' : 'rgba(100,160,255,0.2)'}`,
+                    background: file === virtualFile ? '#93c5fd' : 'rgba(30,40,80,0.8)',
+                    color: file === virtualFile ? '#080d1a' : '#c8d8ff',
+                    border: `1px solid ${file === virtualFile ? '#93c5fd' : 'rgba(100,160,255,0.2)'}`,
                     transition: 'all 0.15s',
                   }}>
                   {label}
@@ -947,7 +976,7 @@ export default function App() {
                 color: windError ? '#ff8080' : undefined,
               }}>
                 {metaLoading || windLoading
-                  ? `⏳ Téléchargement ${modelChoice === 'gfs' ? 'GFS' : 'ECMWF'}… (~20s)`
+                  ? `⏳ Téléchargement ${file === 'openmeteo_gfs' ? 'GFS' : 'ECMWF'}… (~20s)`
                   : windError
                   ? `⚠ ${windError}`
                   : meta
@@ -959,7 +988,7 @@ export default function App() {
                         return <span style={{ display: 'block', opacity: 0.6, fontSize: 10 }}>Run : {run}</span>;
                       })()}
                     </>)
-                  : 'Sélectionner un modèle'}
+                  : null}
               </div>
             </>
           ) : windMode === 'grib' ? (
@@ -1008,7 +1037,7 @@ export default function App() {
             {[['models', 'MODELS'], ['grib', 'GRIB'], ['uniform', 'Uniforme']].map(([mode, label]) => (
               <button key={mode} onClick={() => {
                 setCurrentMode(mode);
-                if (mode === 'models') setCurrentFile(CURRENT_MODELS.find(m => m.key === currentModelChoice)?.file ?? CURRENT_MODELS[0].file);
+                if (mode === 'models') setCurrentFile('');
                 if (mode === 'grib') setCurrentFile('');
               }}
                 style={{
@@ -1029,17 +1058,14 @@ export default function App() {
               {/* Sélecteur de modèle */}
               <div style={{ maxHeight: 168, overflowY: 'auto', marginBottom: 8 }}>
                 {CURRENT_MODELS.map(({ key, label, file: virtualFile }) => (
-                  <button key={key} onClick={() => {
-                    setCurrentModelChoice(key);
-                    setCurrentFile(virtualFile);
-                  }}
+                  <button key={key} onClick={() => { setCurrentFile(virtualFile); centerOnEuropeOnce(); }}
                     style={{
                       display: 'block', width: '100%', marginBottom: 5,
                       padding: '4px 0', borderRadius: 5, fontSize: 10,
                       fontFamily: FONT, cursor: 'pointer',
-                      background: currentModelChoice === key ? '#93c5fd' : 'rgba(30,40,80,0.8)',
-                      color: currentModelChoice === key ? '#080d1a' : '#c8d8ff',
-                      border: `1px solid ${currentModelChoice === key ? '#93c5fd' : 'rgba(100,160,255,0.2)'}`,
+                      background: currentFile === virtualFile ? '#93c5fd' : 'rgba(30,40,80,0.8)',
+                      color: currentFile === virtualFile ? '#080d1a' : '#c8d8ff',
+                      border: `1px solid ${currentFile === virtualFile ? '#93c5fd' : 'rgba(100,160,255,0.2)'}`,
                       transition: 'all 0.15s',
                     }}>
                     {label}
@@ -1047,41 +1073,49 @@ export default function App() {
                 ))}
               </div>
               {/* Zone fixe du modèle direct */}
-              <div style={{ marginBottom: 8 }}>
-                <div style={{
-                  fontSize: 10, padding: '4px 8px', borderRadius: 5,
-                  background: currentMeta ? 'rgba(20,85,164,0.25)' : 'rgba(30,40,80,0.8)',
-                  border: `1px solid ${currentMeta ? 'rgba(100,160,255,0.35)' : 'rgba(100,160,255,0.15)'}`,
-                  cursor: 'default',
-                  color: currentMeta ? '#93c5fd' : '#c8d8ff',
-                }}>
-                  {CURRENT_MODELS.find(m => m.key === currentModelChoice)?.zone}
-                </div>
-              </div>
-              {/* Statut */}
-              <div style={{
-                fontSize: 11, opacity: 0.7, textAlign: 'center', lineHeight: 1.5,
-                color: currentError ? '#ff8080' : undefined,
-              }}>
-                {currentMetaLoading || currentLoading
-                  ? `⏳ Téléchargement ${CURRENT_MODELS.find(m => m.key === currentModelChoice)?.short}…`
-                  : currentError
-                  ? `⚠ ${currentError}`
-                  : currentMeta
-                  ? (<>
-                      {(() => {
-                        const stepH = currentMeta.times.length > 1 ? currentMeta.times[1] - currentMeta.times[0] : null;
-                        const stepLabel = stepH === null ? '?' : stepH < 1 ? `${Math.round(stepH * 60)}min` : `${stepH}h`;
-                        return `✓ ${currentMeta.model} — ${stepLabel} (${currentMeta.days}j)`;
-                      })()}
-                      {currentMeta.run_time && (() => {
-                        const d = new Date(currentMeta.run_time);
-                        const run = `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}h UTC`;
-                        return <span style={{ display: 'block', opacity: 0.6, fontSize: 10 }}>Depuis : {run}</span>;
-                      })()}
-                    </>)
-                  : `Connexion au service ${CURRENT_MODELS.find(m => m.key === currentModelChoice)?.short}…`}
-              </div>
+              {(() => {
+                const selectedModel = CURRENT_MODELS.find(m => m.file === currentFile);
+                if (!selectedModel) return null;
+                return (
+                  <>
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{
+                        fontSize: 10, padding: '4px 8px', borderRadius: 5,
+                        background: currentMeta ? 'rgba(20,85,164,0.25)' : 'rgba(30,40,80,0.8)',
+                        border: `1px solid ${currentMeta ? 'rgba(100,160,255,0.35)' : 'rgba(100,160,255,0.15)'}`,
+                        cursor: 'default',
+                        color: currentMeta ? '#93c5fd' : '#c8d8ff',
+                      }}>
+                        {selectedModel.zone}
+                      </div>
+                    </div>
+                    {/* Statut */}
+                    <div style={{
+                      fontSize: 11, opacity: 0.7, textAlign: 'center', lineHeight: 1.5,
+                      color: currentError ? '#ff8080' : undefined,
+                    }}>
+                      {currentMetaLoading || currentLoading
+                        ? `⏳ Téléchargement ${selectedModel.short}…`
+                        : currentError
+                        ? `⚠ ${currentError}`
+                        : currentMeta
+                        ? (<>
+                            {(() => {
+                              const stepH = currentMeta.times.length > 1 ? currentMeta.times[1] - currentMeta.times[0] : null;
+                              const stepLabel = stepH === null ? '?' : stepH < 1 ? `${Math.round(stepH * 60)}min` : `${stepH}h`;
+                              return `✓ ${currentMeta.model} — ${stepLabel} (${currentMeta.days}j)`;
+                            })()}
+                            {currentMeta.run_time && (() => {
+                              const d = new Date(currentMeta.run_time);
+                              const run = `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}h UTC`;
+                              return <span style={{ display: 'block', opacity: 0.6, fontSize: 10 }}>Depuis : {run}</span>;
+                            })()}
+                          </>)
+                        : null}
+                    </div>
+                  </>
+                );
+              })()}
             </>
           ) : currentMode === 'grib' ? (
             <>
