@@ -391,16 +391,12 @@ class BarotropicCurrentModel:
 # tout en gardant une empreinte mémoire raisonnable (grille native jusqu'à ~1400×1400
 # et jusqu'à ~290 pas de temps pour le Finistère haute résolution en 15 min).
 barotropic_manche_120h      = BarotropicCurrentModel("Manche Atlantique 120h", stride=8)
-barotropic_manche_72h       = BarotropicCurrentModel("Manche Atlantique 72h", stride=8)
-barotropic_manche_48h       = BarotropicCurrentModel("Manche Atlantique 48h", stride=8)
 barotropic_atlantique_ne    = BarotropicCurrentModel("Atlantique Nord Est 120h", stride=6)
 barotropic_finistere_hr     = BarotropicCurrentModel("Finistère haute résolution 72h", stride=10)
 barotropic_hycom_manche     = BarotropicCurrentModel("Hycom Manche Atlantique 120h", stride=3)
 
 BAROTROPIC_MODELS = {
     "barotropic_manche_120h":   barotropic_manche_120h,
-    "barotropic_manche_72h":    barotropic_manche_72h,
-    "barotropic_manche_48h":    barotropic_manche_48h,
     "barotropic_atlantique_ne": barotropic_atlantique_ne,
     "barotropic_finistere_hr":  barotropic_finistere_hr,
     "barotropic_hycom_manche":  barotropic_hycom_manche,

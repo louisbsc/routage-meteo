@@ -35,8 +35,6 @@ const FONT = "'SF Mono', 'Consolas', monospace";
 const CURRENT_MODELS = [
   { key: 'shom',        label: 'SHOM HYCOM',       file: 'shom_mangasc',              zone: 'Manche / Atlantique NE',        short: 'SHOM HYCOM' },
   { key: 'bt_120h',     label: 'Barotropic 120h',  file: 'barotropic_manche_120h',    zone: 'Manche / Atlantique',           short: 'Barotropic' },
-  { key: 'bt_72h',      label: 'Barotropic 72h',   file: 'barotropic_manche_72h',     zone: 'Manche / Atlantique',           short: 'Barotropic' },
-  { key: 'bt_48h',      label: 'Barotropic 48h',   file: 'barotropic_manche_48h',     zone: 'Manche / Atlantique',           short: 'Barotropic' },
   { key: 'bt_ne',       label: 'Barotropic NE',    file: 'barotropic_atlantique_ne',  zone: 'Atlantique Nord-Est',           short: 'Barotropic' },
   { key: 'bt_finistere',label: 'Barotropic Finistère HR', file: 'barotropic_finistere_hr', zone: 'Finistère (haute résolution)', short: 'Barotropic' },
   { key: 'bt_hycom',    label: 'Barotropic Hycom', file: 'barotropic_hycom_manche',   zone: 'Manche / Atlantique (Hycom)',   short: 'Barotropic' },
@@ -231,7 +229,7 @@ export default function App() {
   const [currentLoading, setCurrentLoading]     = useState(false);
   const [currentMetaLoading, setCurrentMetaLoading] = useState(false);
   const [currentError, setCurrentError]         = useState(null);
-  const [showCurrent, setShowCurrent]           = useState(true);
+  const [showCurrent, setShowCurrent]           = useState(false);
   const [currentMode, setCurrentMode]           = useState('grib');  // 'models' | 'grib' | 'uniform'
   const [currentModelChoice, setCurrentModelChoice] = useState('shom'); // clé dans CURRENT_MODELS
   const [uniformCurrent, setUniformCurrent]     = useState({ direction: 180, force: 0.5 });
@@ -590,6 +588,19 @@ export default function App() {
   const toggleClick = (mode) =>
     setClickMode(m => m === mode ? null : mode);
 
+  const selectWind = () => {
+    if (showGrib) { setShowGrib(false); setShowParticles(false); }
+    else { setShowGrib(true); setShowParticles(true); setShowCurrent(false); }
+  };
+  const selectCurrent = () => {
+    if (showCurrent) { setShowCurrent(false); }
+    else { setShowCurrent(true); setShowGrib(false); setShowParticles(false); }
+  };
+  // Sélection seule (jamais de désélection) : utilisé pour les clics sur les
+  // champs internes des cartes, qui ne doivent pouvoir qu'activer la carte.
+  const ensureWindSelected = () => { if (!showGrib) selectWind(); };
+  const ensureCurrentSelected = () => { if (!showCurrent) selectCurrent(); };
+
   const runRouting = async () => {
     if (!depPoint || !arrPoint) return;
     if (propulsionMode === 'voile' && !polaire) return;
@@ -877,16 +888,15 @@ export default function App() {
       }}>
 
         {/* ── Carte vent ───────────────────────────────────────────── */}
-        <div style={card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Vent</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-              <input type="checkbox" checked={showGrib} onChange={e => { setShowGrib(e.target.checked); setShowParticles(e.target.checked); }}
-                style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
-              Afficher
-            </label>
+        <div onClick={selectWind} style={{ ...card, opacity: showGrib ? 1 : 0.55, cursor: 'pointer', transition: 'opacity 0.15s' }}>
+          <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase', marginBottom: 12 }}>
+            Vent
           </div>
 
+          <div
+            onClickCapture={e => { if (!showGrib) { e.stopPropagation(); ensureWindSelected(); } }}
+            onClick={e => e.stopPropagation()}
+          >
           {/* Toggle MODELS / GRIB / Uniforme */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
             {[['ecmwf', 'MODELS'], ['grib', 'GRIB'], ['uniform', 'Uniforme']].map(([mode, label]) => (
@@ -917,6 +927,7 @@ export default function App() {
                 <button key={key} onClick={() => {
                   setModelChoice(key);
                   setFile(virtualFile);
+                  setViewState(v => ({ ...v, longitude: INIT_VIEW.longitude, latitude: INIT_VIEW.latitude, zoom: INIT_VIEW.zoom }));
                 }}
                   style={{
                     display: 'block', width: '100%', marginBottom: 5,
@@ -979,19 +990,19 @@ export default function App() {
               </div>
             </>
           )}
+          </div>
         </div>
 
         {/* ── Carte courant ────────────────────────────────────────── */}
-        <div style={card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase' }}>Courant</div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, opacity: 0.7, cursor: 'pointer' }}>
-              <input type="checkbox" checked={showCurrent} onChange={e => setShowCurrent(e.target.checked)}
-                style={{ accentColor: '#60a5fa', cursor: 'pointer' }} />
-              Afficher
-            </label>
+        <div onClick={selectCurrent} style={{ ...card, opacity: showCurrent ? 1 : 0.55, cursor: 'pointer', transition: 'opacity 0.15s' }}>
+          <div style={{ fontSize: 11, letterSpacing: 2, opacity: 0.4, textTransform: 'uppercase', marginBottom: 12 }}>
+            Courant
           </div>
 
+          <div
+            onClickCapture={e => { if (!showCurrent) { e.stopPropagation(); ensureCurrentSelected(); } }}
+            onClick={e => e.stopPropagation()}
+          >
           {/* Toggle MODELS / GRIB / Uniforme */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
             {[['models', 'MODELS'], ['grib', 'GRIB'], ['uniform', 'Uniforme']].map(([mode, label]) => (
@@ -1100,6 +1111,7 @@ export default function App() {
               </div>
             </>
           )}
+          </div>
         </div>
 
         {/* ── Carte polaire ─────────────────────────────────────────── */}

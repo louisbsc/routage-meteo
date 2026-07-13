@@ -17,7 +17,7 @@ const TRAIL_LENGTH     = 25;        // positions mémorisées par particule
 const LINE_WIDTH       = 1.15;
 
 
-export default function WindParticles({ data, viewState }) {
+export default function WindParticles({ data, viewState, speedScale = 1, fixedSpeed, minSpeed = 0, densityScale = 1 }) {
   const canvasRef  = useRef(null);
   const fieldRef   = useRef(null);
   const vsRef      = useRef(viewState);
@@ -62,7 +62,7 @@ export default function WindParticles({ data, viewState }) {
       const proj  = makeProjector(vsRef.current, width, height);
       projRef.current = proj;   // expose le projecteur au tooltip
 
-      const target = Math.min(MAX_PARTICLES, Math.floor(width * height * PARTICLE_DENSITY));
+      const target = Math.min(MAX_PARTICLES * densityScale, Math.floor(width * height * PARTICLE_DENSITY * densityScale));
       while (particles.length < target) { const p = {}; reseed(p, proj); particles.push(p); }
       if (particles.length > target) particles.length = target;
 
@@ -84,8 +84,9 @@ export default function WindParticles({ data, viewState }) {
 
         const latR     = p.lat * Math.PI / 180;
         const geoScale = REF_WORLD_SIZE / proj.worldSize;
-        const nLat     = p.lat + w.v / 60 * TIME_STEP * geoScale;
-        const nLng     = p.lng + w.u / 60 * TIME_STEP * geoScale / Math.max(0.2, Math.cos(latR));
+        const step     = TIME_STEP * speedScale;
+        const nLat     = p.lat + w.v / 60 * step * geoScale;
+        const nLng     = p.lng + w.u / 60 * step * geoScale / Math.max(0.2, Math.cos(latR));
 
         const [x0, y0] = proj.project(p.lng, p.lat);
         let   [x1, y1] = proj.project(nLng, nLat);
@@ -101,22 +102,26 @@ export default function WindParticles({ data, viewState }) {
         if (p.trail.length > TRAIL_LENGTH) p.trail.shift();
 
         // Dessine la traînée : re-projection à chaque frame → stable au zoom/pan
+        // (segments sous minSpeed omis : pas de particules visibles en zone de courant trop faible)
         const n = p.trail.length;
         for (let i = 0; i < n - 1; i++) {
+          if (p.trail[i].speed < minSpeed) continue;
           const [tx0, ty0] = proj.project(p.trail[i].lng, p.trail[i].lat);
           const [tx1, ty1] = proj.project(p.trail[i + 1].lng, p.trail[i + 1].lat);
-          ctx.strokeStyle = speedColorCss(p.trail[i].speed, (i + 1) / n * 0.88);
+          ctx.strokeStyle = speedColorCss(fixedSpeed ?? p.trail[i].speed, (i + 1) / n * 0.88);
           ctx.beginPath();
           ctx.moveTo(tx0, ty0);
           ctx.lineTo(tx1, ty1);
           ctx.stroke();
         }
         // Segment de tête (pleine opacité)
-        ctx.strokeStyle = speedColorCss(w.speed, 0.92);
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.stroke();
+        if (w.speed >= minSpeed) {
+          ctx.strokeStyle = speedColorCss(fixedSpeed ?? w.speed, 0.92);
+          ctx.beginPath();
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+        }
 
         p.lng = nLng; p.lat = nLat; p.age++;
       }
@@ -156,7 +161,6 @@ export default function WindParticles({ data, viewState }) {
 
       // direction d'où vient le vent (convention météo)
       const dir = Math.round((Math.atan2(w.u, w.v) * 180 / Math.PI + 180 + 360) % 360);
-      const color = speedColorCss(w.speed, 1.0);
 
       // Position du tooltip : à droite du curseur, avec clamp pour rester à l'écran
       let tx = e.clientX + 18;

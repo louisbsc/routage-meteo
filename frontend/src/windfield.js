@@ -42,13 +42,13 @@ function lerpColor(speed) {
   return STOPS[STOPS.length - 1][1];
 }
 
-export function speedColorArr(speed, alpha = 255) {
-  const [r, g, b] = lerpColor(speed);
+export function speedColorArr(speed, alpha = 255, colorFn = lerpColor) {
+  const [r, g, b] = colorFn(speed);
   return [r, g, b, alpha];
 }
 
-export function speedColorCss(speed, alpha = 0.9) {
-  const [r, g, b] = lerpColor(speed);
+export function speedColorCss(speed, alpha = 0.9, colorFn = lerpColor) {
+  const [r, g, b] = colorFn(speed);
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
@@ -158,7 +158,7 @@ export function sample(field, lng, lat) {
 // Les cellules sans donnée (terre côté GRIB) sont remplies par BFS depuis la
 // mer la plus proche, ce qui évite les trous et donne une frontière nette une
 // fois que la couche GeoJSON de la terre recouvre le raster.
-export function buildSpeedRaster(data, alpha = 185) {
+export function buildSpeedRaster(data, alpha = 185, colorFn = lerpColor) {
   const field = buildField(data);
   if (!field) return null;
   const { lon0, lat0, dLon, dLat, nLon, nLat, U, V, M } = field;
@@ -246,7 +246,7 @@ export function buildSpeedRaster(data, alpha = 185) {
       const sp = Math.hypot(ui, vi);
 
       const dst = (r * W + pi) * 4;
-      const [rc, g, b] = lerpColor(sp);
+      const [rc, g, b] = colorFn(sp);
       img.data[dst]     = rc;
       img.data[dst + 1] = g;
       img.data[dst + 2] = b;
