@@ -31,6 +31,17 @@ function fmtCoord(pt) {
 
 const FONT = "'SF Mono', 'Consolas', monospace";
 
+// Modèles de courant à téléchargement direct (SHOM + produits Barotropic).
+const CURRENT_MODELS = [
+  { key: 'shom',        label: 'SHOM HYCOM',       file: 'shom_mangasc',              zone: 'Manche / Atlantique NE',        short: 'SHOM HYCOM' },
+  { key: 'bt_120h',     label: 'Barotropic 120h',  file: 'barotropic_manche_120h',    zone: 'Manche / Atlantique',           short: 'Barotropic' },
+  { key: 'bt_72h',      label: 'Barotropic 72h',   file: 'barotropic_manche_72h',     zone: 'Manche / Atlantique',           short: 'Barotropic' },
+  { key: 'bt_48h',      label: 'Barotropic 48h',   file: 'barotropic_manche_48h',     zone: 'Manche / Atlantique',           short: 'Barotropic' },
+  { key: 'bt_ne',       label: 'Barotropic NE',    file: 'barotropic_atlantique_ne',  zone: 'Atlantique Nord-Est',           short: 'Barotropic' },
+  { key: 'bt_finistere',label: 'Barotropic Finistère HR', file: 'barotropic_finistere_hr', zone: 'Finistère (haute résolution)', short: 'Barotropic' },
+  { key: 'bt_hycom',    label: 'Barotropic Hycom', file: 'barotropic_hycom_manche',   zone: 'Manche / Atlantique (Hycom)',   short: 'Barotropic' },
+];
+
 function computeBoatPosition(routeResult, routeDepAbsH, currentTimeH) {
   const tl = routeResult?.time_list;
   const rt = routeResult?.route;
@@ -218,8 +229,11 @@ export default function App() {
   const [currentMeta, setCurrentMeta]           = useState(null);
   const [currentData, setCurrentData]           = useState([]);
   const [currentLoading, setCurrentLoading]     = useState(false);
+  const [currentMetaLoading, setCurrentMetaLoading] = useState(false);
+  const [currentError, setCurrentError]         = useState(null);
   const [showCurrent, setShowCurrent]           = useState(true);
-  const [currentMode, setCurrentMode]           = useState('grib');  // 'grib' | 'uniform'
+  const [currentMode, setCurrentMode]           = useState('grib');  // 'models' | 'grib' | 'uniform'
+  const [currentModelChoice, setCurrentModelChoice] = useState('shom'); // clé dans CURRENT_MODELS
   const [uniformCurrent, setUniformCurrent]     = useState({ direction: 180, force: 0.5 });
   const [uniformCurrentData, setUniformCurrentData]     = useState([]);
 
@@ -424,10 +438,13 @@ export default function App() {
 
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
-    if (!currentFile) { setCurrentMeta(null); setCurrentData([]); return; }
-    setCurrentMeta(null); setCurrentData([]);
+    if (!currentFile) { setCurrentMeta(null); setCurrentData([]); setCurrentError(null); return; }
+    setCurrentMeta(null); setCurrentData([]); setCurrentError(null); setCurrentMetaLoading(true);
     fetch(`${API}/current/${encodeURIComponent(currentFile)}/meta`)
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText);
+        return r.json();
+      })
       .then(m => {
         setCurrentMeta(m);
         // N'initialise le slider que si aucun vent n'est chargé
@@ -436,7 +453,8 @@ export default function App() {
           setCurrentTimeH(refH + (m.times[0] ?? 0));
         }
       })
-      .catch(() => {});
+      .catch(e => setCurrentError(e.message))
+      .finally(() => setCurrentMetaLoading(false));
   }, [currentFile]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Courant : données interpolées ─────────────────────────────────────
@@ -582,7 +600,7 @@ export default function App() {
     setRouting(true); setRouteResult(null); setRouteError(null); setRoutingProgress(0); setShowCurrentRoute(true);
     const depAbsH = (windMode === 'grib' || windMode === 'ecmwf') && windRefH !== null
       ? windRefH + (meta?.times?.[depTimeIdx] ?? 0)
-      : currentMode === 'grib' && curRefH !== null
+      : currentMode !== 'uniform' && curRefH !== null
         ? curRefH + (currentMeta?.times?.[depTimeIdx] ?? 0)
         : currentTimeH;
     setRouteDepAbsH(depAbsH);
@@ -594,7 +612,7 @@ export default function App() {
         p_dep: depPoint, p_arr: arrPoint,
         t: (windMode === 'grib' || windMode === 'ecmwf')
           ? (meta?.times?.[depTimeIdx] ?? 0)
-          : (currentMode === 'grib' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
+          : (currentMode !== 'uniform' ? (currentMeta?.times?.[depTimeIdx] ?? 0) : 0),
         ...params,
         ...(windMode === 'uniform'
           ? { wind_uniform: { direction: uniformWind.direction, force: uniformWind.force } }
@@ -974,10 +992,14 @@ export default function App() {
             </label>
           </div>
 
-          {/* Toggle GRIB / Uniforme */}
+          {/* Toggle MODELS / GRIB / Uniforme */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-            {['grib', 'uniform'].map(mode => (
-              <button key={mode} onClick={() => setCurrentMode(mode)}
+            {[['models', 'MODELS'], ['grib', 'GRIB'], ['uniform', 'Uniforme']].map(([mode, label]) => (
+              <button key={mode} onClick={() => {
+                setCurrentMode(mode);
+                if (mode === 'models') setCurrentFile(CURRENT_MODELS.find(m => m.key === currentModelChoice)?.file ?? CURRENT_MODELS[0].file);
+                if (mode === 'grib') setCurrentFile('');
+              }}
                 style={{
                   flex: 1, padding: '5px 0', borderRadius: 6, fontSize: 11,
                   fontFamily: FONT, cursor: 'pointer',
@@ -986,18 +1008,77 @@ export default function App() {
                   border: `1px solid ${currentMode === mode ? '#60a5fa' : 'rgba(100,160,255,0.2)'}`,
                   transition: 'all 0.15s',
                 }}>
-                {mode === 'grib' ? 'GRIB' : 'Uniforme'}
+                {label}
               </button>
             ))}
           </div>
 
-          {currentMode === 'grib' ? (
+          {currentMode === 'models' ? (
+            <>
+              {/* Sélecteur de modèle */}
+              <div style={{ maxHeight: 168, overflowY: 'auto', marginBottom: 8 }}>
+                {CURRENT_MODELS.map(({ key, label, file: virtualFile }) => (
+                  <button key={key} onClick={() => {
+                    setCurrentModelChoice(key);
+                    setCurrentFile(virtualFile);
+                  }}
+                    style={{
+                      display: 'block', width: '100%', marginBottom: 5,
+                      padding: '4px 0', borderRadius: 5, fontSize: 10,
+                      fontFamily: FONT, cursor: 'pointer',
+                      background: currentModelChoice === key ? '#93c5fd' : 'rgba(30,40,80,0.8)',
+                      color: currentModelChoice === key ? '#080d1a' : '#c8d8ff',
+                      border: `1px solid ${currentModelChoice === key ? '#93c5fd' : 'rgba(100,160,255,0.2)'}`,
+                      transition: 'all 0.15s',
+                    }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {/* Zone fixe du modèle direct */}
+              <div style={{ marginBottom: 8 }}>
+                <div style={{
+                  fontSize: 10, padding: '4px 8px', borderRadius: 5,
+                  background: currentMeta ? 'rgba(20,85,164,0.25)' : 'rgba(30,40,80,0.8)',
+                  border: `1px solid ${currentMeta ? 'rgba(100,160,255,0.35)' : 'rgba(100,160,255,0.15)'}`,
+                  cursor: 'default',
+                  color: currentMeta ? '#93c5fd' : '#c8d8ff',
+                }}>
+                  {CURRENT_MODELS.find(m => m.key === currentModelChoice)?.zone}
+                </div>
+              </div>
+              {/* Statut */}
+              <div style={{
+                fontSize: 11, opacity: 0.7, textAlign: 'center', lineHeight: 1.5,
+                color: currentError ? '#ff8080' : undefined,
+              }}>
+                {currentMetaLoading || currentLoading
+                  ? `⏳ Téléchargement ${CURRENT_MODELS.find(m => m.key === currentModelChoice)?.short}…`
+                  : currentError
+                  ? `⚠ ${currentError}`
+                  : currentMeta
+                  ? (<>
+                      {(() => {
+                        const stepH = currentMeta.times.length > 1 ? currentMeta.times[1] - currentMeta.times[0] : null;
+                        const stepLabel = stepH === null ? '?' : stepH < 1 ? `${Math.round(stepH * 60)}min` : `${stepH}h`;
+                        return `✓ ${currentMeta.model} — ${stepLabel} (${currentMeta.days}j)`;
+                      })()}
+                      {currentMeta.run_time && (() => {
+                        const d = new Date(currentMeta.run_time);
+                        const run = `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')} ${String(d.getUTCHours()).padStart(2,'0')}h UTC`;
+                        return <span style={{ display: 'block', opacity: 0.6, fontSize: 10 }}>Depuis : {run}</span>;
+                      })()}
+                    </>)
+                  : `Connexion au service ${CURRENT_MODELS.find(m => m.key === currentModelChoice)?.short}…`}
+              </div>
+            </>
+          ) : currentMode === 'grib' ? (
             <>
               <label style={labelStyle}>Fichier</label>
               <select value={currentFile} onChange={e => setCurrentFile(e.target.value)}
                 style={{ ...inputStyle, marginBottom: 12 }}>
                 <option value="">— Choisir un fichier —</option>
-                {currentFiles.map(f => <option key={f} value={f}>{f}</option>)}
+                {currentFiles.filter(f => !f.startsWith('shom_') && !f.startsWith('barotropic_')).map(f => <option key={f} value={f}>{f}</option>)}
               </select>
               {currentLoading && <div style={{ marginTop: 8, fontSize: 10, opacity: 0.4, textAlign: 'center' }}>Chargement…</div>}
             </>
@@ -1231,7 +1312,7 @@ export default function App() {
           t1: windRefH + meta.times[meta.times.length - 1],
           color: '#e8f2ff', opacity: 0.95, key: 'vent',
         } : null;
-        const curBand = (currentMeta && curRefH !== null && currentMode === 'grib') ? {
+        const curBand = (currentMeta && curRefH !== null && currentMode !== 'uniform') ? {
           t0: curRefH + currentMeta.times[0],
           t1: curRefH + currentMeta.times[currentMeta.times.length - 1],
           color: '#7fa8c0', opacity: 0.70, key: 'courant',

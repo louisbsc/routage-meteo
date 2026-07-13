@@ -36,6 +36,13 @@ from inputs.courants import (  # noqa: E402
     courant_grib_nm  as load_courant_nm,
     courant_uniforme,
 )
+from inputs.shom_fetcher import shom_mangasc as shom_mangasc_model  # noqa: E402
+from inputs.barotropic_fetcher import BAROTROPIC_MODELS  # noqa: E402
+
+DIRECT_CURRENT_MODELS = {
+    "shom_mangasc": shom_mangasc_model,
+    **BAROTROPIC_MODELS,
+}
 
 from apscheduler.schedulers.background import BackgroundScheduler  # noqa: E402
 
@@ -57,6 +64,14 @@ def _on_startup():
         threads = [
             threading.Thread(target=ecmwf_model.ensure_fresh, daemon=True),
             threading.Thread(target=gfs_model.ensure_fresh, daemon=True),
+            threading.Thread(target=shom_mangasc_model.ensure_fresh, daemon=True),
+            # Les produits Barotropic partagent un seul compte : on les télécharge en
+            # série (un thread, une boucle) pour ne pas ouvrir 6 connexions/logins
+            # simultanés sur leur serveur.
+            threading.Thread(
+                target=lambda: [m.ensure_fresh() for m in BAROTROPIC_MODELS.values()],
+                daemon=True,
+            ),
         ]
         for t in threads:
             t.start()
@@ -64,6 +79,9 @@ def _on_startup():
             t.join()
         ecmwf_model.register_jobs(_scheduler)
         gfs_model.register_jobs(_scheduler)
+        shom_mangasc_model.register_jobs(_scheduler)
+        for i, m in enumerate(BAROTROPIC_MODELS.values()):
+            m.register_jobs(_scheduler, minute_offset=i * 5)
         _scheduler.start()
 
     threading.Thread(target=_boot, daemon=True, name="wind-boot").start()
@@ -359,14 +377,17 @@ def _get_current_grid(filename: str, stride: int):
 
 @app.get("/current-files")
 def list_current_files():
-    return sorted(
+    grib_files = sorted(
         f.name for f in GRIB_COURANT_DIR.iterdir()
         if f.suffix in ('.grb', '.grb2', '.grib', '.grib2')
     )
+    return grib_files + list(DIRECT_CURRENT_MODELS)
 
 
 @app.get("/current/{filename}/meta")
 def get_current_meta(filename: str):
+    if filename in DIRECT_CURRENT_MODELS:
+        return _om_call(DIRECT_CURRENT_MODELS[filename].get_meta)
     if not (GRIB_COURANT_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     df = _load_current(filename)
@@ -420,6 +441,25 @@ def get_current_interpolated(filename: str, t: float, stride: int = 2):
 
 @app.get("/current/{filename}/grid")
 def get_current_grid_view(filename: str, t: float, lat0: float, lat1: float, lon0: float, lon1: float, step: float = 1.0):
+    if filename in DIRECT_CURRENT_MODELS:
+        model  = DIRECT_CURRENT_MODELS[filename]
+        C      = _om_call(model.get_V_deg)
+        mbbox  = _om_call(model.get_meta)["bbox"]
+        clat0  = max(lat0, mbbox[1]);  clat1 = min(lat1, mbbox[3])
+        clon0  = max(lon0, mbbox[0]);  clon1 = min(lon1, mbbox[2])
+        grid   = _get_sea_grid(clat0, clat1, clon0, clon1, step)
+        if grid is None:
+            return {"lat": [], "lon": [], "dir": [], "speed": []}
+        lo_f, la_f, sea = grid
+        current = C(np.column_stack([lo_f[sea], la_f[sea]]), t)
+        fast    = current[:, 1] > 0.01
+        return {
+            "time_h": float(t),
+            "lat":   np.round(la_f[sea][fast], 4).tolist(),
+            "lon":   np.round(lo_f[sea][fast], 4).tolist(),
+            "dir":   np.round(current[fast, 0], 1).tolist(),
+            "speed": np.round(current[fast, 1], 3).tolist(),
+        }
     if not (GRIB_COURANT_DIR / filename).exists():
         raise HTTPException(404, "File not found")
     C = _get_courant(str(GRIB_COURANT_DIR / filename))
@@ -518,6 +558,8 @@ def _build_courant(req: "RoutingRequest"):
     if req.courant_uniform:
         return courant_uniforme(req.courant_uniform.direction, req.courant_uniform.force)
     if req.grib_courant_file:
+        if req.grib_courant_file in DIRECT_CURRENT_MODELS:
+            return _om_call(DIRECT_CURRENT_MODELS[req.grib_courant_file].get_V_nm)
         path = GRIB_COURANT_DIR / req.grib_courant_file
         if not path.exists():
             raise HTTPException(404, "GRIB courant introuvable")
