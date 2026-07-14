@@ -391,7 +391,7 @@ export default function App() {
   }, [currentTimeH, windRefH, meta]);
 
   useEffect(() => {
-    if (!file || !meta || windRefH === null) return;
+    if (!showGrib || !file || !meta || windRefH === null) return;
     const tWind = currentTimeH - windRefH;
     if (tWind < meta.times[0] || tWind > meta.times[meta.times.length - 1]) {
       setWindData([]); setWindLoading(false); return;
@@ -418,6 +418,7 @@ export default function App() {
 
           // Précharge les pas de temps adjacents en arrière-plan
           setTimeout(() => {
+            if (!showGrib) return;
             [nearestGribIdx - 1, nearestGribIdx + 1, nearestGribIdx - 2, nearestGribIdx + 2].forEach(idx => {
               if (idx < 0 || idx >= meta.times.length) return;
               const tPre = meta.times[idx];
@@ -438,7 +439,7 @@ export default function App() {
         .catch(() => setWindLoading(false));
     }, 80);
     return () => { clearTimeout(timer); ctrl.abort(); };
-  }, [file, meta, currentTimeH, windRefH, viewport, windStep, nearestGribIdx]);
+  }, [showGrib, file, meta, currentTimeH, windRefH, viewport, windStep, nearestGribIdx]);
 
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
@@ -478,7 +479,7 @@ export default function App() {
 
   // ── Courant : données interpolées ─────────────────────────────────────
   useEffect(() => {
-    if (!currentFile || !currentMeta || curRefH === null) return;
+    if (!showCurrent || !currentFile || !currentMeta || curRefH === null) return;
     const tCur = currentTimeH - curRefH;
     const tMin = currentMeta.times[0];
     const tMax = currentMeta.times[currentMeta.times.length - 1];
@@ -509,6 +510,7 @@ export default function App() {
           if (curCache.current.size > 40) curCache.current.delete(curCache.current.keys().next().value);
 
           setTimeout(() => {
+            if (!showCurrent) return;
             [bestCurIdx - 1, bestCurIdx + 1].forEach(idx => {
               if (idx < 0 || idx >= currentMeta.times.length) return;
               const tPre = currentMeta.times[idx];
@@ -529,7 +531,7 @@ export default function App() {
         .catch(() => setCurrentLoading(false));
     }, 80);
     return () => { clearTimeout(timer); ctrl.abort(); };
-  }, [currentFile, currentMeta, currentTimeH, curRefH, viewport, autoStep]);
+  }, [showCurrent, currentFile, currentMeta, currentTimeH, curRefH, viewport, autoStep]);
 
   // ── Reset routeResult si départ/arrivée changent ─────────────────────
   useEffect(() => { setRouteResult(null); }, [depPoint, arrPoint]);
@@ -718,24 +720,26 @@ export default function App() {
   // ── Grille vent uniforme ──────────────────────────────────────────────
   useEffect(() => {
     if (windMode !== 'uniform') { setUniformWindData([]); return; }
+    if (!showGrib) return;
     const { lat0, lat1, lon0, lon1 } = viewport;
     const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${windStep}&direction=${uniformWind.direction}&force=${uniformWind.force}`;
     const timer = setTimeout(() => {
       fetch(url).then(r => r.json()).then(({ data }) => setUniformWindData(data)).catch(() => {});
     }, 120);
     return () => clearTimeout(timer);
-  }, [windMode, viewport, uniformWind, windStep]);
+  }, [windMode, showGrib, viewport, uniformWind, windStep]);
 
   // ── Grille courant uniforme ───────────────────────────────────────────
   useEffect(() => {
     if (currentMode !== 'uniform') { setUniformCurrentData([]); return; }
+    if (!showCurrent) return;
     const { lat0, lat1, lon0, lon1 } = viewport;
     const url = `${API}/wind/uniform/grid?lat0=${lat0}&lat1=${lat1}&lon0=${lon0}&lon1=${lon1}&step=${autoStep}&direction=${uniformCurrent.direction}&force=${uniformCurrent.force}`;
     const timer = setTimeout(() => {
       fetch(url).then(r => r.json()).then(({ data }) => setUniformCurrentData(data)).catch(() => {});
     }, 120);
     return () => clearTimeout(timer);
-  }, [currentMode, viewport, uniformCurrent, autoStep]);
+  }, [currentMode, showCurrent, viewport, uniformCurrent, autoStep]);
 
   // ── Computed ──────────────────────────────────────────────────────────
   // currentTimeH est en heures absolues depuis l'époque Unix
