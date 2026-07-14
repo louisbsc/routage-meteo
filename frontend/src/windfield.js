@@ -158,7 +158,7 @@ export function sample(field, lng, lat) {
 // Les cellules sans donnée (terre côté GRIB) sont remplies par BFS depuis la
 // mer la plus proche, ce qui évite les trous et donne une frontière nette une
 // fois que la couche GeoJSON de la terre recouvre le raster.
-export function buildSpeedRaster(data, alpha = 185, colorFn = lerpColor) {
+export function buildSpeedRaster(data, alpha = 185, colorFn = lerpColor, maxDim = 2048) {
   const field = buildField(data);
   if (!field) return null;
   const { lon0, lat0, dLon, dLat, nLon, nLat, U, V, M } = field;
@@ -192,7 +192,8 @@ export function buildSpeedRaster(data, alpha = 185, colorFn = lerpColor) {
   }
 
   // Upsampling par interpolation bilinéaire : gradient lisse sans extra-requête API
-  const SCALE = Math.min(8, Math.max(1, Math.floor(2048 / Math.max(nLon, nLat))));
+  // (maxDim réduit pendant l'interaction du slider pour alléger la boucle pixel ci-dessous)
+  const SCALE = Math.min(8, Math.max(1, Math.floor(maxDim / Math.max(nLon, nLat))));
   const W = nLon * SCALE;
   const H = nLat * SCALE;
 

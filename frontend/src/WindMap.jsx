@@ -39,9 +39,14 @@ export default function WindMap({
   extraRoutes = [],
   landData = null,
   showParticles = false,
+  lowQuality = false,
 }) {
-  const windRaster    = useMemo(() => buildSpeedRaster(data), [data]);
-  const currentRaster = useMemo(() => buildSpeedRaster(currentData, 165, currentRasterColor), [currentData]);
+  // Pendant le drag du slider, on réduit la résolution du raster (calcul pixel par
+  // pixel sur le thread principal) pour éviter les saccades ; la pleine résolution
+  // revient dès que l'utilisateur relâche le curseur.
+  const rasterMaxDim = lowQuality ? 512 : 2048;
+  const windRaster    = useMemo(() => buildSpeedRaster(data, 185, undefined, rasterMaxDim), [data, rasterMaxDim]);
+  const currentRaster = useMemo(() => buildSpeedRaster(currentData, 165, currentRasterColor, rasterMaxDim), [currentData, rasterMaxDim]);
 
   // Couche du bas : fond couleur vent + fond couleur courant
   const rasterLayer = useMemo(() => {

@@ -184,6 +184,18 @@ export default function App() {
   const [file, setFile]             = useState('');
   const [meta, setMeta]             = useState(null);
   const [currentTimeH, setCurrentTimeH] = useState(0);  // heure absolue (offset GRIB)
+  // Valeur débattue de currentTimeH : pilote les fetches vent/courant et les
+  // reconstructions coûteuses (raster, particules), pour ne pas les rejouer à
+  // chaque cran quand on parcourt rapidement le slider. Le curseur et le label,
+  // eux, restent branchés sur currentTimeH (raw) pour un retour instantané.
+  const [renderTimeH, setRenderTimeH] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setRenderTimeH(currentTimeH), 60);
+    return () => clearTimeout(t);
+  }, [currentTimeH]);
+  // Drag actif du slider : fait tourner le raster en basse résolution le temps
+  // de l'interaction (voir WindMap `lowQuality`).
+  const [sliderDragging, setSliderDragging] = useState(false);
   const [showGrib, setShowGrib]         = useState(true);
   const [showParticles, setShowParticles] = useState(true);
   const [windData, setWindData]     = useState([]);
@@ -392,7 +404,7 @@ export default function App() {
 
   useEffect(() => {
     if (!file || !meta || windRefH === null) return;
-    const tWind = currentTimeH - windRefH;
+    const tWind = renderTimeH - windRefH;
     if (tWind < meta.times[0] || tWind > meta.times[meta.times.length - 1]) {
       setWindData([]); setWindLoading(false); return;
     }
@@ -438,7 +450,7 @@ export default function App() {
         .catch(() => setWindLoading(false));
     }, 80);
     return () => { clearTimeout(timer); ctrl.abort(); };
-  }, [file, meta, currentTimeH, windRefH, viewport, windStep, nearestGribIdx]);
+  }, [file, meta, renderTimeH, windRefH, viewport, windStep, nearestGribIdx]);
 
   // ── Courant : meta ────────────────────────────────────────────────────
   useEffect(() => {
@@ -479,7 +491,7 @@ export default function App() {
   // ── Courant : données interpolées ─────────────────────────────────────
   useEffect(() => {
     if (!currentFile || !currentMeta || curRefH === null) return;
-    const tCur = currentTimeH - curRefH;
+    const tCur = renderTimeH - curRefH;
     const tMin = currentMeta.times[0];
     const tMax = currentMeta.times[currentMeta.times.length - 1];
     if (tCur < tMin || tCur > tMax) {
@@ -529,7 +541,7 @@ export default function App() {
         .catch(() => setCurrentLoading(false));
     }, 80);
     return () => { clearTimeout(timer); ctrl.abort(); };
-  }, [currentFile, currentMeta, currentTimeH, curRefH, viewport, autoStep]);
+  }, [currentFile, currentMeta, renderTimeH, curRefH, viewport, autoStep]);
 
   // ── Reset routeResult si départ/arrivée changent ─────────────────────
   useEffect(() => { setRouteResult(null); }, [depPoint, arrPoint]);
@@ -880,6 +892,7 @@ export default function App() {
         extraRoutes={extraRoutes}
         landData={landData}
         showParticles={showParticles}
+        lowQuality={sliderDragging}
       />
 
       {/* ══ HUD bateau ══════════════════════════════════════════════════════ */}
@@ -1413,6 +1426,10 @@ export default function App() {
                 step={1}
                 value={currentTimeH}
                 onChange={e => setCurrentTimeH(+e.target.value)}
+                onPointerDown={() => setSliderDragging(true)}
+                onPointerUp={() => setSliderDragging(false)}
+                onPointerCancel={() => setSliderDragging(false)}
+                onBlur={() => setSliderDragging(false)}
                 style={{
                   position: 'absolute', top: 0, left: 0,
                   width: '100%', height: '100%',
