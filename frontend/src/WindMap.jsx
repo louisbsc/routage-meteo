@@ -180,7 +180,7 @@ export default function WindMap({
 
       {/* Particules : entre le raster et la terre/routes/marqueurs */}
       {showParticles && <WindParticles data={data} viewState={viewState} />}
-      {showCurrent && <WindParticles data={currentData} viewState={viewState} speedScale={6} fixedSpeed={0} minSpeed={0.15} densityScale={2.5} />}
+      {showCurrent && <WindParticles data={currentData} viewState={viewState} speedScale={6} fixedSpeed={0} minSpeed={0.15} densityScale={1.2} />}
 
       {/* Terre, isochrones, routes, marqueurs (capte les événements) */}
       <DeckGL
