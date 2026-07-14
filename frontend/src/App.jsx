@@ -391,7 +391,7 @@ export default function App() {
   }, [currentTimeH, windRefH, meta]);
 
   useEffect(() => {
-    if (!showGrib || !file || !meta || windRefH === null) return;
+    if (!showGrib || !file || !meta || windRefH === null) { setWindLoading(false); return; }
     const tWind = currentTimeH - windRefH;
     if (tWind < meta.times[0] || tWind > meta.times[meta.times.length - 1]) {
       setWindData([]); setWindLoading(false); return;
@@ -479,7 +479,7 @@ export default function App() {
 
   // ── Courant : données interpolées ─────────────────────────────────────
   useEffect(() => {
-    if (!showCurrent || !currentFile || !currentMeta || curRefH === null) return;
+    if (!showCurrent || !currentFile || !currentMeta || curRefH === null) { setCurrentLoading(false); return; }
     const tCur = currentTimeH - curRefH;
     const tMin = currentMeta.times[0];
     const tMax = currentMeta.times[currentMeta.times.length - 1];
